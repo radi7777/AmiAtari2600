@@ -10,6 +10,14 @@
 #include "bus.h"
 #include "cpu.h"
 #include "riot.h"
+#ifdef A26_ASM_CPU
+#include "cpu_asm.h"
+
+static void build_asm_map(AsmCpu *c)
+{
+    cart_build_asm_map(c->map);
+}
+#endif
 
 A26State a26;
 
@@ -39,6 +47,15 @@ void a26_reset(void)
     riot_reset();
     tia_reset();
     cpu_reset();
+#ifdef A26_ASM_CPU
+    /* biased pointers: ram_base[$80..$FF] and stack_base[S] (S >= $80) */
+    actx.ram_base = (u8 *)((unsigned long)riot.ram - 0x80);
+    actx.stack_base = actx.ram_base;
+    actx.mirror = 1;
+    actx.map_dirty = 1;
+    cpu_asm_build_map = build_asm_map;
+    cpu_asm_map_changed = cart_asm_map_changed;
+#endif
     a26.lines_avg = (a26.region == REGION_PAL) ? 312 : 262;
     a26.frames = 0;
     region_votes = 0;
@@ -71,7 +88,7 @@ void a26_run_frame(void)
     tia.frame_done = 0;
     while (!tia.frame_done) {
         a26_stop = 0;
-        cpu_run(a26_cycles + 76u * 32u);
+        CPU_RUN(a26_cycles + 76u * 32u);
         tia_update();           /* may end the frame (max lines) */
     }
     a26_stop = 0;

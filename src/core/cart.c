@@ -328,3 +328,56 @@ void cart_tia_write(u16 addr, u8 val)
         threef_map();
     }
 }
+
+#ifdef A26_ASM_CPU
+/* ---- read map for the assembler core --------------------------------- */
+
+static const u8 *map_seg[4];
+static u8 map_e7_bank;
+
+/* pages that must go through cart_read(): hotspots and cartridge RAM */
+static int slow_page(u16 a)
+{
+    switch (cart.type) {
+    case CART_F8SC: case CART_F6SC: case CART_F4SC:
+        return a < 0x100 || a == 0xF00;
+    case CART_FA:
+        return a < 0x200 || a == 0xF00;
+    case CART_E7:
+        return (a < 0x800 && cart.e7_rom_bank == 7) || (a >= 0x800 && a < 0xA00) || a == 0xF00;
+    case CART_F8: case CART_F6: case CART_F4: case CART_E0:
+        return a == 0xF00;
+    default:
+        return 0;
+    }
+}
+
+void cart_build_asm_map(u32 *map)
+{
+    int p;
+    for (p = 0; p < 256; p++) {
+        u16 addr = (u16)(p << 8);
+        u16 a = addr & 0x0FFF;
+        const u8 *ptr;
+        if (!(addr & 0x1000) || slow_page(a)) {
+            map[p] = 0;
+            continue;
+        }
+        if (cart.type == CART_FE)
+            ptr = cart.rom + a + ((addr & 0x2000) ? 0 : 4096);
+        else
+            ptr = cart.seg[a >> 10] + (a & 0x3FF);
+        /* biased so that map[p] + (s16)address points at the byte */
+        map[p] = (u32)(unsigned long)ptr - (u32)(s32)(s16)addr;
+    }
+    for (p = 0; p < 4; p++) map_seg[p] = cart.seg[p];
+    map_e7_bank = cart.e7_rom_bank;
+}
+
+int cart_asm_map_changed(void)
+{
+    return cart.seg[0] != map_seg[0] || cart.seg[1] != map_seg[1] ||
+           cart.seg[2] != map_seg[2] || cart.seg[3] != map_seg[3] ||
+           cart.e7_rom_bank != map_e7_bank;
+}
+#endif

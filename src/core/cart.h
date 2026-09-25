@@ -49,4 +49,10 @@ void cart_write(u16 addr, u8 val);
 extern int  cart_tia_hook;
 void cart_tia_write(u16 addr, u8 val);
 
+#ifdef A26_ASM_CPU
+/* read map for the assembler CPU core (see cpu_asm.h) */
+void cart_build_asm_map(u32 *map);
+int  cart_asm_map_changed(void);
+#endif
+
 #endif

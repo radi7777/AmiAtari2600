@@ -272,15 +272,24 @@ static u8 audio_phase1(TiaAudioChannel *c)
     return (u8)((c->pulse & 0x01) * c->audv);
 }
 
+/* one scanline = two audio ticks; returns the summed output (0..30) */
+static u8 audio_channel_line(TiaAudioChannel *c)
+{
+    u8 s;
+    audio_phase0(c);
+    s = audio_phase1(c);
+    audio_phase0(c);
+    return (u8)(s + audio_phase1(c));
+}
+
 static void audio_line(void)
 {
     u8 s0, s1;
     int i = tia.audio_len;
-    audio_phase0(&tia.ach[0]); audio_phase0(&tia.ach[1]);
-    s0 = audio_phase1(&tia.ach[0]); s1 = audio_phase1(&tia.ach[1]);
-    audio_phase0(&tia.ach[0]); audio_phase0(&tia.ach[1]);
-    s0 = (u8)(s0 + audio_phase1(&tia.ach[0]));
-    s1 = (u8)(s1 + audio_phase1(&tia.ach[1]));
+    /* a silent channel is not clocked: its divider/polynomial phase does
+     * not matter until the volume is raised again */
+    s0 = tia.ach[0].audv ? audio_channel_line(&tia.ach[0]) : 0;
+    s1 = tia.ach[1].audv ? audio_channel_line(&tia.ach[1]) : 0;
     if (tia.audio_buf && i < TIA_MAX_LINES) {
         tia.audio_buf[i] = s0;
         tia.audio_buf[TIA_MAX_LINES + i] = s1;
@@ -329,13 +338,25 @@ static void render(int x0, int x1)
         u16 coll = tia.coll;
 
         if (!gp0 && !gp1 && !m0 && !m1 && !bl) {
-            /* fast path: playfield + background only */
-            u8 cbk = tia.colubk;
-            for (x = x0; x < x1; x++) {
-                if (pf & pfm[x])
-                    out[x] = (x < 80) ? tia.col_l[C_PF] : tia.col_r[C_PF];
-                else
-                    out[x] = cbk;
+            /* fast path: playfield + background only. The playfield
+             * changes every 4 pixels, so whole 4-pixel blocks are filled. */
+            const u8 cbk = tia.colubk, cl = tia.col_l[C_PF], cr = tia.col_r[C_PF];
+            u8 *o;
+            x = x0;
+            while (x < x1 && (x & 3)) {             /* unaligned head */
+                out[x] = (pf & pfm[x]) ? ((x < 80) ? cl : cr) : cbk;
+                x++;
+            }
+            o = out + x;
+            while (x + 4 <= x1) {                   /* whole blocks */
+                u8 c = (pf & pfm[x]) ? ((x < 80) ? cl : cr) : cbk;
+                o[0] = c; o[1] = c; o[2] = c; o[3] = c;
+                o += 4;
+                x += 4;
+            }
+            while (x < x1) {                        /* tail */
+                out[x] = (pf & pfm[x]) ? ((x < 80) ? cl : cr) : cbk;
+                x++;
             }
             return;
         }

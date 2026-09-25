@@ -6,11 +6,13 @@ src/core/      plattformneutraler Emulationskern (C99, auch vbcc-tauglich)
   bus.c        Adressdekodierung (TIA / RIOT-RAM / RIOT-I/O / Cartridge)
   tia.c        TIA: Video (Catch-up-Rendering), Kollisionen, Audio, Eingänge
   riot.c       6532: 128 Byte RAM, Timer (lazy berechnet), Ports
-  cart.c       ROM-Mapping, Bankswitching, Typ-Erkennung
+  cart.c       ROM-Mapping, Bankswitching, Typ-Erkennung, Lese-Map für den asm-Kern
+  cpu_asm.c    C-Anbindung des Assembler-Kerns (Callbacks, Einzelschritt über cpu.c)
   atari.c      Frame-Schleife, Eingabe-API, PAL/NTSC-Erkennung
   palette.c    NTSC-/PAL-Paletten (24 Bit)
 src/amiga/     Amiga-Frontend (AmigaOS-Header, direkter Hardwarezugriff)
-  hw.c         System-Takeover/-Restore, Agnus-Erkennung, BEAMCON0, VBL-Sync
+  cpu6507.s    6507-Interpreter in 68030-Assembler (vasm), Rückfall auf cpu.c
+  hw.c         System-Takeover/-Restore, Agnus-Erkennung, BEAMCON0, VBL-Sync, Zeilenzähler
   vidconv.c    TIA-Zeile -> Farbregister + Copper-Moves + Bitplanes (portabel, host-getestet)
   video.c      Copper-Listen, Double-Buffer, Displayfenster PAL/NTSC
   audio.c      Paula-Ausgabe
@@ -19,6 +21,7 @@ src/amiga/     Amiga-Frontend (AmigaOS-Header, direkter Hardwarezugriff)
 src/host/      Testrahmen für Linux/macOS (PPM/WAV-Ausgabe)
 tests/         CPU-Test, Test-ROMs (eigener Assembler), Video-Konvertierungstest
 tools/         asm6502.py: kleiner 6502-Assembler für Test-ROMs
+               qemu_icount.py: 68k-Befehle pro Frame/Funktion unter qemu-m68k zählen
 ```
 
 ## Zeitmodell
@@ -90,17 +93,71 @@ Sample (Periode ≈ 227). Jeder TIA-Kanal liegt auf zwei Paula-Kanälen (links +
 damit er in der Mitte klingt. Die Puffer werden ohne Interrupts gewechselt: Das neue
 `AUDxLC` wird geschrieben, und Paula übernimmt es am Ende des laufenden Puffers.
 
+## Assembler-CPU
+
+`src/amiga/cpu6507.s` ist ein Hybrid-Kern. Die häufigen Opcodes (Laden/Speichern in allen
+Adressierungsarten, ALU, Vergleiche, Branches, JSR/RTS, Stack, INC/DEC, Shifts) laufen in
+Assembler. Alles andere springt zu `fallback`: Der Zustand wird an `cpu.c` übergeben,
+genau ein Befehl wird in C ausgeführt, dann geht es in Assembler weiter. Damit ist der
+Kern von Anfang an vollständig und kann Opcode für Opcode ausgebaut werden. Den Eintrag in
+der Tabelle am Ende von `cpu6507.s` von `fallback` auf das neue `op_XX` ändern, und
+Dormann-Test plus `make m68k-test` zeigen sofort, ob er stimmt.
+
+Registerbelegung: d2 = A, d3 = X, d4 = Y, d5 = Zyklenzähler, d6/d7 = N-/Z-Quelle,
+a3 = PC, a5 = Lese-Map, a6 = RAM. C, V, D und I liegen als Bytes im Kontext (`cpu_asm.h`).
+
+Speicherzugriffe laufen über eine Seitentabelle mit 256 Einträgen. Cartridge-Seiten zeigen
+direkt ins ROM. Hotspot-Seiten, TIA und RIOT sind langsame Seiten und gehen über einen
+C-Callback. Zero Page ab $80 und der Stack greifen direkt aufs RAM. Die Tabelle wird nur
+nach Bankwechseln neu gebaut.
+
+## Performance
+
+Gemessen mit `make m68k-profile`: ausgeführte 68k-Befehle pro emuliertem Frame
+(gcc -O2 -m68030, qemu-m68k; ohne Amiga-Bildkonvertierung und Chip-RAM):
+
+| Test-ROM | C-CPU | asm-CPU |
+|---|---|---|
+| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, Playfield) | 961.000 | 648.000 |
+| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 |
+
+Budget für 60 fps: etwa 130.000–200.000 Befehle pro Frame auf einem 68030 mit 50 MHz
+(bei ~4–6 Takten pro Befehl), die Hälfte bei 25 MHz.
+
+Aufteilung beim asm-Kern (`busy_ntsc`):
+- ~40 % TIA-Rendering (`render`)
+- ~15 % Dispatch-Schleife (`loop`)
+- Rest: Opcodes, TIA-Register, Callbacks
+
+Die CPU kostet im Moment rund 40 68k-Befehle pro 6502-Befehl, davon ~15 allein für
+Fetch und Dispatch.
+
+Nächste Schritte, nach Hebelwirkung geordnet:
+1. **TIA-Rendering umbauen.** Der Pixelpfad kostet 6–8 Befehle pro Pixel, hinzu kommen
+   ~50 Befehle Fixkosten pro `render`-Aufruf. Jeder TIA-Schreibzugriff mitten in der Zeile
+   erzeugt einen solchen Aufruf. Ziel: Zeilen nach Abschnitten und nicht nach Pixeln
+   rendern.
+   - Playfield/Hintergrund als 4-Pixel-Blöcke über Tabellen
+   - Objekte als 8-Pixel-Stempel
+   - Kollisionen per Bitmasken-UND nur dann berechnen, wenn sich Objekte auf der Zeile
+     überlappen können
+   - Registerwrites, die nichts Sichtbares ändern, ohne Rendern übernehmen
+2. **Fetch/Dispatch im asm-Kern verbilligen:**
+   - PC als Host-Zeiger (`move.b (a3)+,d0`), neu setzen nur bei Sprüngen und
+     Seitenwechseln
+   - Hotspot-Seite $1Fxx nur für $1FE0–$1FFF langsam behandeln statt für die ganze Seite
+   - häufige TIA-Writes (WSYNC, Farben, GRPx) ohne den generischen C-Weg
+3. **Frameskip ohne Pixelarbeit:** In übersprungenen Frames nur Kollisionen berechnen.
+4. **Auf echter Hardware messen** (`BENCH=500`, `PROFILE`): qemu zählt Befehle, keine
+   Takte. Chip-RAM-Zugriffe und die 256-Byte-Caches des 68030 kann nur echte Hardware
+   bzw. WinUAE im Cycle-Exact-Modus zeigen.
+
 ## Offene Punkte / nächste Schritte
 
 1. **Erster echter Build mit vbcc + NDK** auf dem Mac und die nötigen Korrekturen.
 2. **Test in einem Emulator** (FS-UAE/Amiberry auf dem Mac, A1200 bzw. A3000 mit
    68030 und ECS), danach auf echter Hardware.
-3. **Performance auf dem 68030 messen.** Noch gibt es keine Zahlen. Kandidaten fürs
-   Tuning:
-   - `vbcc -O2 -speed` gegen `-O3` vergleichen
-   - `__reg()` im CPU-Dispatch
-   - Opcode-Fetch direkt aus den Cartridge-Segmenten statt über `bus_read`
-   - TIA-Pixelschleife in Assembler
+3. **Performance auf dem 68030 messen und optimieren** (siehe [Performance](#performance)).
 4. **Genauigkeit gegen echte Spiele prüfen** (per Screenshot-Vergleich mit Stella):
    - HMOVE mitten in der Zeile ("Cosmic Ark"-Sterne)
    - Verzögerung beim RESMP-Entriegeln

@@ -29,6 +29,7 @@ echo "== Test ROMs"
 python3 tools/asm6502.py tests/roms/bars_ntsc.asm $B/bars_ntsc.bin || fail "assemble bars_ntsc"
 python3 tools/asm6502.py tests/roms/bars_pal.asm $B/bars_pal.bin || fail "assemble bars_pal"
 python3 tools/asm6502.py tests/roms/bank_f8.asm $B/bank_f8.bin --size 8192 || fail "assemble bank_f8"
+python3 tools/asm6502.py tests/roms/busy_ntsc.asm $B/busy_ntsc.bin || fail "assemble busy_ntsc"
 
 out=$($A26HOST $B/bars_ntsc.bin -frames 60 -ppm $B/bars_ntsc.ppm -wav $B/bars_ntsc.wav -q)
 echo "$out" | grep -q "type: 4K  region: NTSC  lines: 262 (avg 262)  visible: 40-231" \

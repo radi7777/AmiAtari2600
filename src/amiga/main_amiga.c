@@ -3,7 +3,7 @@
  *
  * Usage (CLI):
  *   A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n]
- *             [PORT1] [NOSOUND]
+ *             [PORT1] [NOSOUND] [PROFILE] [BENCH=n]
  *
  *   PAL / NTSC     force the region instead of detecting it
  *   COLORS=...     force the palette (e.g. PAL60 games: NTSC timing, PAL colours)
@@ -11,6 +11,9 @@
  *   SKIP=n         render only every (n+1)th frame (default: automatic)
  *   PORT1          use the joystick in the mouse port as player 2
  *   NOSOUND        no Paula output
+ *   PROFILE        print timing statistics on exit
+ *   BENCH=n        run n frames as fast as possible (no vsync, no frameskip),
+ *                  then print the statistics and quit
  *
  * Keys: ESC quit, F1 Game Reset, F2 Game Select, F3 colour/B&W,
  *       F4/F5 left/right difficulty, F6 region auto/NTSC/PAL,
@@ -40,9 +43,49 @@ static struct {
     int skip;           /* -1 auto */
     int port1;
     int nosound;
+    int profile;
+    long bench;         /* frames, 0 = off */
 } opt;
 
 static int display_pal;
+
+/* ---- profiling (raster lines from CIA-B TOD) ---- */
+enum { PH_EMU, PH_AUDIO, PH_RENDER, PH_WAIT, PH_COUNT };
+static const char *const ph_name[PH_COUNT] = { "emulation", "audio", "render+c2p", "vsync wait" };
+static struct {
+    ULONG sum[PH_COUNT], max[PH_COUNT];
+    ULONG frames, rendered, skipped, late;
+    ULONG total_lines;
+} prof;
+
+static void prof_add(int ph, ULONG lines)
+{
+    prof.sum[ph] += lines;
+    if (lines > prof.max[ph]) prof.max[ph] = lines;
+}
+
+static void prof_report(void)
+{
+    int i;
+    ULONG budget = display_pal ? 312 : 262;
+    if (!prof.frames) return;
+    printf("\n%lu frames (%lu rendered, %lu skipped, %lu late), budget %lu lines/frame\n",
+           prof.frames, prof.rendered, prof.skipped, prof.late, budget);
+    printf("%-12s %8s %8s %8s\n", "phase", "avg", "max", "% budget");
+    for (i = 0; i < PH_COUNT; i++) {
+        ULONG n = (i == PH_RENDER || i == PH_WAIT) ? (prof.rendered ? prof.rendered : 1) : prof.frames;
+        ULONG avg10 = prof.sum[i] * 10 / n;
+        printf("%-12s %6lu.%lu %8lu %7lu%%\n", ph_name[i], avg10 / 10, avg10 % 10,
+               prof.max[i], avg10 * 10 / budget);
+    }
+    if (prof.total_lines) {
+        /* one raster line: 64 us (PAL), 63.5 us (NTSC) */
+        ULONG ms = display_pal ? prof.total_lines * 64 / 1000 : prof.total_lines * 127 / 2000;
+        printf("total %lu ms, %lu.%lu emulated frames/s\n", ms,
+               ms ? prof.frames * 1000 / ms : 0, ms ? (prof.frames * 10000 / ms) % 10 : 0);
+    }
+}
+
 static int vstart = -1, vstart_pending = -1, vstart_count;
 
 static int streq_nocase(const char *a, const char *b)
@@ -76,13 +119,19 @@ static int parse_args(int argc, char **argv)
         else if (strncmp(a, "SKIP=", 5) == 0 || strncmp(a, "skip=", 5) == 0) opt.skip = atoi(a + 5);
         else if (streq_nocase(a, "PORT1")) opt.port1 = 1;
         else if (streq_nocase(a, "NOSOUND")) opt.nosound = 1;
+        else if (streq_nocase(a, "PROFILE")) opt.profile = 1;
+        else if (strncmp(a, "BENCH=", 6) == 0 || strncmp(a, "bench=", 6) == 0) {
+            opt.bench = atol(a + 6);
+            opt.profile = 1;
+            opt.skip = 0;
+        }
         else if (!opt.rom) opt.rom = a;
         else { printf("unknown option %s\n", a); return -1; }
     }
     if (!opt.rom) {
         printf("A26 %s - Atari 2600 emulator for Amiga 68030/ECS\n"
                "usage: A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|F4|...]\n"
-               "           [SKIP=n] [PORT1] [NOSOUND]\n", VERSION);
+               "           [SKIP=n] [PORT1] [NOSOUND] [PROFILE] [BENCH=n]\n", VERSION);
         return -1;
     }
     return 0;
@@ -155,11 +204,16 @@ static void run(void)
     int bw = 0, diff0 = 0, diff1 = 0, paused = 0;
     int skip_count = 0, late = 0;
 
+    ULONG t, t_start;
+
     input_init();
     apply_mode();
+    t_start = hw_lines();
 
     for (;;) {
         u8 joy0, joy1 = 0;
+
+        if (opt.bench && (long)prof.frames >= opt.bench) break;
 
         input_poll();
         if (key_down(KEY_ESC)) break;
@@ -197,26 +251,39 @@ static void run(void)
         a26_set_joystick(0, joy0);
         a26_set_joystick(1, joy1);
 
+        t = hw_lines();
         a26_run_frame();
+        prof_add(PH_EMU, hw_lines_since(t));
+        prof.frames++;
 
         if (a26.region_changed) {
             a26.region_changed = 0;
             apply_mode();
         }
+        t = hw_lines();
         if (!opt.nosound) audio_frame();
+        prof_add(PH_AUDIO, hw_lines_since(t));
 
         /* frame skipping: fixed (SKIP=n) or automatic when we missed the
          * previous vertical blank (at most 2 frames in a row) */
         if ((opt.skip > 0 && skip_count < opt.skip) ||
             (opt.skip < 0 && late && skip_count < 2)) {
             skip_count++;
+            prof.skipped++;
             late = 0;
             continue;
         }
         skip_count = 0;
+        t = hw_lines();
         video_render(a26_framebuffer(), TIA_FB_LINES, choose_vstart());
-        late = video_present();
+        prof_add(PH_RENDER, hw_lines_since(t));
+        t = hw_lines();
+        late = video_present(!opt.bench);
+        prof_add(PH_WAIT, hw_lines_since(t));
+        prof.rendered++;
+        if (late) prof.late++;
     }
+    prof.total_lines = hw_lines_since(t_start);
 }
 
 int main(int argc, char **argv)
@@ -254,6 +321,7 @@ int main(int argc, char **argv)
     run();
     if (!opt.nosound) audio_stop();
     hw_restore();
+    if (opt.profile) prof_report();
 
     audio_free();
     video_free();

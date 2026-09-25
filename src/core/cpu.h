@@ -22,4 +22,13 @@ u32  cpu_run(u32 target);
 u8   cpu_get_p(void);
 void cpu_set_p(u8 p);
 
+/* the frame loop calls CPU_RUN: the C core, or the 68k assembler core
+ * (src/amiga/cpu6507.s) when built with -DA26_ASM_CPU */
+#ifdef A26_ASM_CPU
+u32  cpu_asm_run(u32 target);
+#define CPU_RUN cpu_asm_run
+#else
+#define CPU_RUN cpu_run
+#endif
+
 #endif

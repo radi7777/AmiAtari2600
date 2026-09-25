@@ -46,6 +46,15 @@ void hw_cleanup(void)
     }
 }
 
+ULONG hw_lines(void)
+{
+    /* reading the high byte latches the counter until the low byte is read */
+    ULONG hi = ciab->ciatodhi;
+    ULONG mid = ciab->ciatodmid;
+    ULONG lo = ciab->ciatodlow;
+    return (hi << 16) | (mid << 8) | lo;
+}
+
 int hw_beam_line(void)
 {
     return (int)((*(volatile ULONG *)0xDFF004 >> 8) & 0x1FF);

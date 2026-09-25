@@ -165,12 +165,13 @@ void video_render(const u8 *tia_fb, int fb_lines, int first)
     }
 }
 
-int video_present(void)
+int video_present(int wait)
 {
     int late = hw_vbl_pending();
     hw->cop1lc = (ULONG)buf[back].cop;
     /* the copper restarts from COP1LC at the next vertical blank */
-    hw_wait_vbl();
+    if (wait)
+        hw_wait_vbl();
     back ^= 1;
     return late;
 }

@@ -17,8 +17,8 @@ void video_set_mode(int pal, int pal_colours);
 int  video_height(void);
 /* convert TIA lines [first, first + height) into the back buffer */
 void video_render(const u8 *tia_fb, int fb_lines, int first);
-/* show the back buffer from the next frame on and wait for that frame.
- * Returns 1 if the frame deadline was already missed (we are late). */
-int  video_present(void);
+/* show the back buffer from the next frame on and (if wait) wait for that
+ * frame. Returns 1 if the frame deadline was already missed (we are late). */
+int  video_present(int wait);
 
 #endif

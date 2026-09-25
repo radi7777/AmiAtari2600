@@ -9,7 +9,8 @@ Projektziele und Hintergrund stehen in [docs/PROJEKT.md](docs/PROJEKT.md), der A
 
 | Teil | Status |
 |---|---|
-| 6507-CPU (inkl. illegaler Opcodes) | fertig, besteht Klaus Dormanns 6502-Funktionstest |
+| 6507-CPU in C (inkl. illegaler Opcodes) | fertig, besteht Klaus Dormanns 6502-Funktionstest |
+| 6507-CPU in 68k-Assembler (`src/amiga/cpu6507.s`) | 135 Opcodes in Assembler, Rest über den C-Kern; besteht den Dormann-Test unter qemu-m68k, rendert identisch zum C-Kern |
 | TIA-Video (Playfield, Player, Missiles, Ball, Kollisionen, HMOVE, VDEL) | fertig, farbtaktgenaues Catch-up-Rendering |
 | TIA-Audio | fertig (Schaltungsmodell, 1 Sample pro Scanline) |
 | RIOT (RAM, Timer, Ports) | fertig |
@@ -17,11 +18,14 @@ Projektziele und Hintergrund stehen in [docs/PROJEKT.md](docs/PROJEKT.md), der A
 | PAL/NTSC-Erkennung | fertig (Zeilen pro Frame, mit Hysterese) |
 | Amiga: Video (Copper-Palette pro Zeile, C2P, Double-Buffer) | geschrieben, Konvertierung auf dem Host getestet, **noch nie auf Amiga gelaufen** |
 | Amiga: BEAMCON0-Umschaltung, Paula, Joystick, Tastatur | geschrieben, **ungetestet** |
-| Amiga: vbcc-Build | Makefile vorhanden, **noch nie mit vbcc/NDK übersetzt** |
+| Amiga: vbcc-Build | Makefile vorhanden, **noch nie mit vbcc/NDK übersetzt** (der Assembler-Kern ist mit vasm -Fhunk getestet) |
+| Amiga: Zeitmessung (`PROFILE`, `BENCH=n`) | geschrieben, **ungetestet** |
 
 Der Kern ist plattformneutrales C und wird hier auf Linux sowie als 68030-Binary unter
-qemu-m68k (big-endian) getestet. Der Amiga-Teil wurde nur gegen nachgebaute NDK-Header
-syntaktisch geprüft.
+qemu-m68k (big-endian) getestet, mit C- und mit Assembler-CPU. Der übrige Amiga-Teil
+wurde nur gegen nachgebaute NDK-Header syntaktisch geprüft.
+
+Performance-Stand und Plan: siehe [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md#performance).
 
 ## Bauen
 
@@ -38,17 +42,25 @@ sichtbaren Bereich aus. Optional schreibt es das letzte Bild als PPM (320 Pixel 
 wie auf dem Amiga) und den Ton als WAV. Weitere Optionen: `-type F8`, `-region pal`,
 `-reset N` (Game Reset ab Frame N drücken), `-fire N`, `-bench`.
 
+Mit m68k-Cross-GCC, `qemu-m68k` und `vasmm68k_mot` (Linux, z. B. im Docker-Container
+auf dem Mac) gibt es außerdem:
+
+```sh
+make m68k-test                         # alle Tests als 68030-Binary, C- und asm-CPU
+make m68k-profile PROFILE_ROM=roms/x.bin   # 68k-Befehle pro Frame, nach Funktionen
+```
+
 ROMs gehören in den Ordner `roms/`. Er ist von git ausgenommen, und `make test` lässt
 alle `roms/*.bin` zusätzlich 300 Frames laufen.
 
 ### Amiga (vbcc)
 
-Voraussetzungen: vbcc mit Target `m68k-amigaos` (`$VBCC` gesetzt, `vc` im PATH) und das
-AmigaOS NDK 3.1 oder 3.2.
+Voraussetzungen: vbcc mit Target `m68k-amigaos` (`$VBCC` gesetzt, `vc` und
+`vasmm68k_mot` im PATH) und das AmigaOS NDK 3.1 oder 3.2.
 
 ```sh
 make -f Makefile.amiga NDK_INC=/pfad/zu/NDK3.2/Include_H
-# -> build/amiga/A26
+# -> build/amiga/A26 (mit Assembler-CPU; ASM_CPU=0 für die C-CPU)
 ```
 
 In VS Code gibt es fertige Tasks (`Terminal > Run Task`): Host-Build, Tests und
@@ -58,6 +70,7 @@ Amiga-Build. Für den Amiga-Build muss die Umgebungsvariable `NDK_INC` gesetzt s
 
 ```
 A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [PORT1] [NOSOUND]
+    [PROFILE] [BENCH=n]
 ```
 
 - Region und Bankswitching werden automatisch erkannt. `PAL`/`NTSC` bzw. `TYPE=`
@@ -66,6 +79,11 @@ A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [PORT1] [NOSOUN
 - `SKIP=n`: nur jedes (n+1)-te Frame darstellen. Ohne Angabe regelt der Emulator das
   automatisch (höchstens 2 Frames am Stück).
 - `PORT1`: Joystick im Mausport steuert Spieler 2.
+- `PROFILE`: gibt beim Beenden eine Zeittabelle aus. Sie zeigt pro Frame Emulation, Ton,
+  Bildkonvertierung und Vsync-Wartezeit in Rasterzeilen, gemessen über den CIA-B-TOD.
+  Das Budget liegt bei 312 (PAL) bzw. 262 (NTSC) Zeilen pro Frame.
+- `BENCH=n`: lässt n Frames ohne Vsync und ohne Frameskip so schnell wie möglich laufen
+  und gibt dann die Tabelle und die erreichten Frames pro Sekunde aus.
 
 | Taste | Funktion |
 |---|---|

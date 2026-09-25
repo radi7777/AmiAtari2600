@@ -12,6 +12,7 @@
 
 #define hw    ((volatile struct Custom *)0xDFF000)
 #define ciaa  ((volatile struct CIA *)0xBFE001)
+#define ciab  ((volatile struct CIA *)0xBFD000)
 
 /* registers that are not in every NDK's struct Custom */
 #define HW_REG(off) (*(volatile UWORD *)(0xDFF000 + (off)))
@@ -45,5 +46,9 @@ int  hw_vbl_pending(void);      /* vertical blank happened since last clear */
 void hw_clear_vbl(void);
 void hw_wait_lines(int n);      /* busy-wait n raster lines (~64 us each) */
 int  hw_beam_line(void);        /* current vertical beam position */
+/* free-running raster line counter (CIA-B TOD, counts HSYNC, 24 bit).
+ * One line = 64 us (PAL) / 63.5 us (NTSC). Use hw_lines_since(). */
+ULONG hw_lines(void);
+#define hw_lines_since(t) ((hw_lines() - (t)) & 0xFFFFFF)
 
 #endif
