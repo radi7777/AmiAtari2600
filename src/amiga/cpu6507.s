@@ -16,7 +16,7 @@
 ;   d2 = A   d3 = X   d4 = Y    (upper 24 bits always zero)
 ;   d5 = cycle counter (a26_cycles)
 ;   d6 = N source (bit 7)   d7 = Z source (Z set when byte == 0)
-;   a2 = opcode table   a3 = PC (0..$FFFF)   a4 = AsmCpu
+;   a2 = opcode table   a3 = PC as host pointer (see cpu_asm.h)   a4 = AsmCpu
 ;   a5 = read map       a6 = ram_base
 ;
 ; Timing: every memory access adds one cycle (fast paths do addq.l #1,d5,
@@ -45,7 +45,9 @@ C_FI     equ 55
 C_MIRROR equ 56
 C_TMP    equ 58          ; word: TMP = high byte, TMP+1 = low byte
 C_TMP2   equ 60
-C_MAP    equ 64
+C_PCBIAS equ 64          ; PC = (a3 - C_PCBIAS) & $FFFF
+C_PCEND  equ 68          ; end of the current fast code page, 0 = slow mode
+C_MAP    equ 72
 
 ; ======================================================================
 ; macros
@@ -68,11 +70,31 @@ READ    macro
 .d\@:
         endm
 
-; fetch operand byte at PC -> d0.l
+; fetch the next code byte -> d0.l. Fast path: a3 points into the ROM.
 FETCHB  macro
+        cmp.l   C_PCEND(a4),a3
+        bhs.s   .s\@
+        moveq   #0,d0
+        move.b  (a3)+,d0
+        addq.l  #1,d5
+        bra.s   .d\@
+.s\@:
+        bsr     fetch_slow
+.d\@:
+        endm
+
+; current 6502 PC -> d0.l
+GETPC   macro
         move.l  a3,d0
-        addq.l  #1,a3
-        READ
+        sub.l   C_PCBIAS(a4),d0
+        and.l   #$ffff,d0
+        endm
+
+; jump: d0.l = new PC (0..$FFFF). The next fetch looks up the page.
+SETPC   macro
+        move.l  d0,a3
+        clr.l   C_PCBIAS(a4)
+        clr.l   C_PCEND(a4)
         endm
 
 ; fetch 16 bit operand at PC -> d0.l
@@ -323,6 +345,8 @@ sync_in:
         move.l  C_X(a4),d3
         move.l  C_Y(a4),d4
         move.l  C_PC(a4),a3
+        clr.l   C_PCBIAS(a4)
+        clr.l   C_PCEND(a4)
         move.l  C_CYC(a4),d5
         move.l  C_P(a4),d0
         bra     unpackp
@@ -331,8 +355,7 @@ sync_out:
         move.l  d2,C_A(a4)
         move.l  d3,C_X(a4)
         move.l  d4,C_Y(a4)
-        move.l  a3,d0
-        and.l   #$ffff,d0
+        GETPC
         move.l  d0,C_PC(a4)
         move.l  d5,C_CYC(a4)
         bsr     packp
@@ -435,6 +458,35 @@ slow_write:
         move.l  C_CYC(a4),d5
         rts
 
+; code fetch outside the current fast page (or in slow mode): find the
+; page of the PC; if it is a fast page switch to pointer mode, otherwise
+; read through slow_read and stay in slow mode. -> d0.l = byte
+fetch_slow:
+        GETPC
+        move.w  d0,d1
+        lsr.w   #8,d1
+        move.l  (a5,d1.w*4),a0
+        move.l  a0,d1
+        beq.s   .slowpage
+        move.l  a0,C_PCBIAS(a4)
+        lea     (a0,d0.w),a3            ; host pointer of PC (biased map entry)
+        move.w  d0,d1
+        and.w   #$ff,d1
+        neg.w   d1
+        add.w   #$100,d1                ; bytes left in this page (1..256)
+        lea     (a3,d1.w),a0
+        move.l  a0,C_PCEND(a4)
+        moveq   #0,d0
+        move.b  (a3)+,d0
+        addq.l  #1,d5
+        rts
+.slowpage:
+        clr.l   C_PCBIAS(a4)
+        clr.l   C_PCEND(a4)
+        move.l  d0,a3
+        addq.l  #1,a3                   ; PC + 1 (bias 0: a3 is the PC)
+        bra     slow_read
+
 ; unimplemented opcode: let the C core execute it
 fallback:
         subq.l  #1,a3           ; back to the opcode
@@ -445,19 +497,34 @@ fallback:
         bsr     sync_in
         bra     loop
 
-; common tail of taken branches: d0 = offset byte
+; common tail of taken branches: d0 = offset byte, a3 = next instruction
 take:
         ext.w   d0
-        move.l  a3,d1
-        add.w   d1,d0
         addq.l  #1,d5
+        move.l  C_PCEND(a4),d1
+        beq.s   .generic                ; slow mode
+        cmp.l   d1,a3
+        bhs.s   .generic                ; next instruction is on the next page
+        lea     (a3,d0.w),a0
+        cmp.l   d1,a0
+        bhs.s   .generic                ; target after this page
+        sub.l   #256,d1
+        cmp.l   d1,a0
+        blo.s   .generic                ; target before this page
+        move.l  a0,a3                   ; same page: no penalty cycle
+        bra     loop
+.generic:
+        move.w  d0,a0                   ; offset (sign-extended)
+        GETPC
+        move.l  d0,d1
+        add.w   a0,d0
         eor.w   d0,d1
         and.w   #$ff00,d1
         beq.s   .same
-        addq.l  #1,d5
+        addq.l  #1,d5                   ; page crossed
 .same:
         and.l   #$ffff,d0
-        move.l  d0,a3
+        SETPC
         bra     loop
 
 ; ======================================================================
@@ -932,7 +999,7 @@ op_EA:  addq.l  #1,d5           ; NOP
 
 ; ---- jumps ----
 op_4C:  FETCHW                  ; JMP abs
-        move.l  d0,a3
+        SETPC
         bra     loop
 op_6C:  FETCHW                  ; JMP (ind), with the page wrap bug
         move.w  d0,C_TMP2(a4)
@@ -944,21 +1011,22 @@ op_6C:  FETCHW                  ; JMP (ind), with the page wrap bug
         move.b  d0,C_TMP(a4)
         moveq   #0,d0
         move.w  C_TMP(a4),d0
-        move.l  d0,a3
+        SETPC
         bra     loop
 op_20:  FETCHB                  ; JSR: lo, dummy, push PCH, push PCL, hi
         move.b  d0,C_TMP2+1(a4)
         addq.l  #1,d5
-        move.l  a3,d1
-        lsr.w   #8,d1
+        GETPC                           ; address of the high operand byte
+        move.w  d0,C_TMP(a4)
+        move.b  C_TMP(a4),d1
         PUSH
-        move.l  a3,d1
+        move.b  C_TMP+1(a4),d1
         PUSH
         FETCHB
         move.b  d0,C_TMP2(a4)
         moveq   #0,d0
         move.w  C_TMP2(a4),d0
-        move.l  d0,a3
+        SETPC
         bra     loop
 op_60:  addq.l  #2,d5           ; RTS
         PULL
@@ -968,7 +1036,7 @@ op_60:  addq.l  #2,d5           ; RTS
         moveq   #0,d0
         move.w  C_TMP2(a4),d0
         addq.w  #1,d0
-        move.l  d0,a3
+        SETPC
         addq.l  #1,d5
         bra     loop
 

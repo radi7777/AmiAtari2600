@@ -19,14 +19,17 @@ int  (*cpu_asm_map_changed)(void);
 /* compile-time layout checks (the assembler uses fixed offsets) */
 typedef char check_flags[(sizeof(void *) != 4 || offsetof(AsmCpu, fc) == 52) ? 1 : -1];
 typedef char check_tmp[(sizeof(void *) != 4 || offsetof(AsmCpu, tmp) == 58) ? 1 : -1];
-typedef char check_map[(sizeof(void *) != 4 || offsetof(AsmCpu, map) == 64) ? 1 : -1];
+typedef char check_pc[(sizeof(void *) != 4 || offsetof(AsmCpu, pcbias) == 64) ? 1 : -1];
+typedef char check_map[(sizeof(void *) != 4 || offsetof(AsmCpu, map) == 72) ? 1 : -1];
 
 /* only cartridge accesses (and, for 3F, TIA writes) can switch banks */
 static void after_io(u32 addr)
 {
     actx.cycles = a26_cycles;
-    if (((addr & 0x1000) || actx.bank_on_tia) && cpu_asm_map_changed && cpu_asm_map_changed())
+    if (((addr & 0x1000) || actx.bank_on_tia) && cpu_asm_map_changed && cpu_asm_map_changed()) {
         cpu_asm_build_map(&actx);
+        actx.pcend = 0;         /* code pointer may point into the old bank */
+    }
     if (a26_stop || cpu.jammed)
         actx.target = actx.cycles;      /* leave the core after this instruction */
 }

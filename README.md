@@ -10,7 +10,7 @@ Projektziele und Hintergrund stehen in [docs/PROJEKT.md](docs/PROJEKT.md), der A
 | Teil | Status |
 |---|---|
 | 6507-CPU in C (inkl. illegaler Opcodes) | fertig, besteht Klaus Dormanns 6502-Funktionstest |
-| 6507-CPU in 68k-Assembler (`src/amiga/cpu6507.s`) | 135 Opcodes in Assembler, Rest über den C-Kern; besteht den Dormann-Test unter qemu-m68k, rendert identisch zum C-Kern |
+| 6507-CPU in 68k-Assembler (`src/amiga/cpu6507.s`) | 135 Opcodes in Assembler, Rest über den C-Kern, PC als direkter ROM-Zeiger; besteht den Dormann-Test unter qemu-m68k, rendert identisch zum C-Kern |
 | TIA-Video (Playfield, Player, Missiles, Ball, Kollisionen, HMOVE, VDEL) | fertig, farbtaktgenaues Catch-up-Rendering; optimierter Renderer (Playfield-Blöcke + Objekt-Stempel), per Fuzz-Test identisch zum Referenz-Renderer |
 | TIA-Audio | fertig (Schaltungsmodell, 1 Sample pro Scanline) |
 | RIOT (RAM, Timer, Ports) | fertig |

@@ -107,6 +107,14 @@ Dormann-Test plus `make m68k-test` zeigen sofort, ob er stimmt.
 Registerbelegung: d2 = A, d3 = X, d4 = Y, d5 = Zyklenzähler, d6/d7 = N-/Z-Quelle,
 a3 = PC, a5 = Lese-Map, a6 = RAM. C, V, D und I liegen als Bytes im Kontext (`cpu_asm.h`).
 
+Der PC ist ein direkter Zeiger ins ROM: Solange der Code in einer schnellen Seite läuft,
+ist ein Opcode-Fetch nur `cmp.l PCEND,a3` / `move.b (a3)+,d0`. Erst am Seitenende, nach
+Sprüngen oder nach einem Bankwechsel wird die Seite in der Tabelle nachgeschlagen. Code
+in langsamen Seiten (Hotspot-Seite, RAM) läuft in einem „langsamen Modus“ über die
+C-Callbacks. Branches innerhalb der Seite addieren nur den Offset. Genau dann entfällt
+auch der Strafzyklus für den Seitenwechsel. `tests/roms/cpu_paths.asm` prüft diese Fälle
+zyklengenau.
+
 Speicherzugriffe laufen über eine Seitentabelle mit 256 Einträgen. Cartridge-Seiten zeigen
 direkt ins ROM. Hotspot-Seiten, TIA und RIOT sind langsame Seiten und gehen über einen
 C-Callback. Zero Page ab $80 und der Stack greifen direkt aufs RAM. Die Tabelle wird nur
@@ -117,10 +125,10 @@ nach Bankwechseln neu gebaut.
 Gemessen mit `make m68k-profile`: ausgeführte 68k-Befehle pro emuliertem Frame
 (gcc -O2 -m68030, qemu-m68k; ohne Amiga-Bildkonvertierung und Chip-RAM):
 
-| Test-ROM | Anfang (C-CPU) | asm-CPU | + neuer TIA-Renderer |
-|---|---|---|---|
-| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, 2 TIA-Writes/Zeile) | 961.000 | 648.000 | **537.000** |
-| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 | **273.000** |
+| Test-ROM | Anfang (C-CPU) | asm-CPU | + neuer TIA-Renderer | + PC als Zeiger |
+|---|---|---|---|---|
+| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, 2 TIA-Writes/Zeile) | 961.000 | 648.000 | 537.000 | **467.000** |
+| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 | 273.000 | **264.000** |
 
 Budget für 60 fps: etwa 130.000–200.000 Befehle pro Frame auf einem 68030 mit 50 MHz
 (bei ~4–6 Takten pro Befehl), die Hälfte bei 25 MHz.
@@ -147,20 +155,25 @@ Der alte Pixel-für-Pixel-Renderer bleibt als Referenz erhalten (`-DA26_TIA_REFE
 (40 Seeds × 60 Frames) und verlangt identische Pixel und identische Kollisionswerte.
 Jede weitere Optimierung muss diesen Test bestehen.
 
+Die CPU kostet mit dem Zeiger-PC etwa 23 68k-Befehle pro emuliertem 6502-Befehl,
+anfangs waren es ~100 mit dem C-Kern und ~40 mit dem ersten asm-Kern.
+
 ### Wo die Zeit jetzt hingeht (asm-CPU)
 
-- `busy_ntsc`: CPU-Dispatch (`loop`) ~17 %, Opcodes ~30 %, Playfield ~20 %, der Weg
-  eines TIA-Writes (asm → `cb_write` → `bus_write` → `tia_write`) ~10 %
+- `busy_ntsc`:
+  - TIA-Rendering (`update_to` inkl. Playfield) ~47 %
+  - Dispatch-Schleife (`loop`) ~13 %
+  - Weg eines TIA-Writes (asm → `slow_write` → `cb_write` → `bus_write` → `tia_write`)
+    ~17 %
+  - Opcodes der Rest
 - `bars_ntsc`: Playfield ~25 %, Objektpixel (`eval_pixels`) ~17 %
 
 ### Nächste Schritte, nach Hebelwirkung geordnet
 
-1. **Fetch/Dispatch im asm-Kern:**
-   - PC als Host-Zeiger (`move.b (a3)+,d0`), neu setzen nur bei Sprüngen und
-     Seitenwechseln
-   - Hotspot-Seite $1Fxx nur für $1FE0–$1FFF langsam behandeln
-2. **TIA-Writes direkt aus Assembler:** Zero-Page-Writes nach $00–$3F sofort an
-   `tia_write` statt über `cb_write` → `bus_write`.
+1. **TIA-Writes direkt aus Assembler:** Zero-Page-Writes nach $00–$3F sofort an
+   `tia_write` statt über `slow_write` → `cb_write` → `bus_write`.
+2. **Hotspot-Seite $1Fxx** nur für $1FE0–$1FFF langsam behandeln. Viele Spiele haben
+   Code in der letzten Seite, der im Moment im langsamen Modus läuft.
 3. **Unveränderte Zeilen erkennen:** Zeilen mit gleichem Registerverlauf wie im
    Vorframe nicht neu zeichnen; den Amiga-seitigen Vergleich für C2P gibt es schon.
    Die Kollisionen müssen dabei weiter stimmen.

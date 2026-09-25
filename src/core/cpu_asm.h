@@ -9,7 +9,8 @@
  * Register use inside the core:
  *   d2 = A, d3 = X, d4 = Y (zero-extended), d5 = cycle counter,
  *   d6 = N source byte, d7 = Z source byte (Z set when 0),
- *   a2 = opcode jump table, a3 = PC, a4 = AsmCpu, a5 = read map,
+ *   a2 = opcode jump table, a3 = PC as host pointer (see below),
+ *   a4 = AsmCpu, a5 = read map,
  *   a6 = ram_base. C, V, D, I live as bytes in AsmCpu (0 / non-zero).
  *
  * Memory access:
@@ -20,6 +21,14 @@
  *   - zero page $80-$FF and the stack go straight to RAM.
  *   - opcodes not implemented in assembler call step(), which executes a
  *     single instruction with the C core (cpu.c).
+ *
+ * Program counter: while code runs from a fast page, a3 points directly at
+ * the next code byte and pcend at the end of that 256 byte page, so an
+ * opcode fetch is just "cmp.l pcend,a3 / move.b (a3)+,d0". pcbias is the
+ * map entry of that page, i.e. PC = (a3 - pcbias) & $FFFF. In slow mode
+ * (code in a slow page, or after a jump) pcbias = pcend = 0 and a3 holds
+ * the PC itself; the next fetch looks the page up again. Whenever the map
+ * is rebuilt (bankswitch) the C side clears pcend to force that lookup.
  */
 #ifndef A26_CPU_ASM_H
 #define A26_CPU_ASM_H
@@ -39,7 +48,9 @@ typedef struct {
     u16 tmp, tmp2;                           /* 58, 60: scratch */
     u8  bank_on_tia;                         /* 62: C side: TIA writes can switch banks (3F) */
     u8  pad1;
-    u32 map[256];                            /* 64 */
+    u32 pcbias;                              /* 64: PC = (a3 - pcbias) & $FFFF */
+    u32 pcend;                               /* 68: end of the fast code page, 0 = slow/invalid */
+    u32 map[256];                            /* 72 */
 } AsmCpu;
 
 extern AsmCpu actx;

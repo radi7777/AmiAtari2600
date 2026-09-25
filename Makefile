@@ -57,7 +57,7 @@ m68k-test: m68k-build
 	@echo "######## 68030, assembler CPU core"
 	A26HOST="$(QEMU) $(BUILD)/a26host_asm.m68k" CPUTEST="$(QEMU) $(BUILD)/cpu_functional_asm.m68k" \
 	VIDTEST="$(QEMU) $(BUILD)/vidconv_test.m68k" TIATEST="$(QEMU) $(BUILD)/tia_equiv.m68k" sh tests/run_tests.sh
-	@for r in bars_ntsc busy_ntsc bank_f8; do \
+	@for r in bars_ntsc busy_ntsc bank_f8 cpu_paths; do \
 	  $(QEMU) $(BUILD)/a26host.m68k $(BUILD)/$$r.bin -frames 30 -ppm $(BUILD)/c_$$r.ppm -q >/dev/null; \
 	  $(QEMU) $(BUILD)/a26host_asm.m68k $(BUILD)/$$r.bin -frames 30 -ppm $(BUILD)/a_$$r.ppm -q >/dev/null; \
 	  cmp -s $(BUILD)/c_$$r.ppm $(BUILD)/a_$$r.ppm && echo "  ok   $$r: C and asm core render identical frames" \

@@ -31,6 +31,7 @@ python3 tools/asm6502.py tests/roms/bars_ntsc.asm $B/bars_ntsc.bin || fail "asse
 python3 tools/asm6502.py tests/roms/bars_pal.asm $B/bars_pal.bin || fail "assemble bars_pal"
 python3 tools/asm6502.py tests/roms/bank_f8.asm $B/bank_f8.bin --size 8192 || fail "assemble bank_f8"
 python3 tools/asm6502.py tests/roms/busy_ntsc.asm $B/busy_ntsc.bin || fail "assemble busy_ntsc"
+python3 tools/asm6502.py tests/roms/cpu_paths.asm $B/cpu_paths.bin --size 8192 || fail "assemble cpu_paths"
 
 out=$($A26HOST $B/bars_ntsc.bin -frames 60 -ppm $B/bars_ntsc.ppm -wav $B/bars_ntsc.wav -q)
 echo "$out" | grep -q "type: 4K  region: NTSC  lines: 262 (avg 262)  visible: 40-231" \
@@ -48,6 +49,14 @@ echo "$out" | grep -q "region: PAL  lines: 312" && ok "PAL detected from 312 lin
 out=$($A26HOST $B/bank_f8.bin -frames 30 -ppm $B/bank_f8.ppm -q)
 echo "$out" | grep -q "type: F8" && ok "F8 autodetected" || fail "F8 detection: $out"
 python3 tests/check.py row $B/bank_f8.ppm 50 0:2d32b8 159:2d32b8 && ok "F8 bank switch" || fail "F8 bank switch"
+
+$A26HOST $B/cpu_paths.bin -frames 31 -ppm $B/cpu_paths.ppm -q >/dev/null
+# delay loop: 8 cycles per iteration incl. the page-crossing penalty -> 24 px steps
+python3 tests/check.py row $B/cpu_paths.ppm 20 89:767676 90:d2d2d2 97:d2d2d2 98:767676 \
+  && python3 tests/check.py row $B/cpu_paths.ppm 21 66:d2d2d2 73:d2d2d2 74:767676 \
+  && python3 tests/check.py row $B/cpu_paths.ppm 23 18:d2d2d2 25:d2d2d2 \
+  && ok "branch page-crossing penalty, slow-page code, bankswitch from \$1Fxx" \
+  || fail "cpu_paths"
 
 echo "== TIA renderer (optimised vs. reference per-pixel renderer)"
 if $TIATEST; then ok "tia_equiv"; else fail "tia_equiv"; fi
