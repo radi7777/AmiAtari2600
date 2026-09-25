@@ -17,6 +17,19 @@ static void build_asm_map(AsmCpu *c)
 {
     cart_build_asm_map(c->map);
 }
+
+/* TIA write fast path for the asm core: no bus decoding and no bankswitch
+ * check (TIA writes only switch banks on 3F carts, which use the normal
+ * path). Parameters are u32 so vbcc and gcc agree on the calling convention. */
+static void asm_tia_write(u32 addr, u32 val)
+{
+    a26_cycles = actx.cycles + 1;       /* the bus cycle of this write */
+    a26_databus = (u8)val;
+    tia_write((u16)addr, (u8)val);
+    actx.cycles = a26_cycles;           /* WSYNC may have added cycles */
+    if (a26_stop)
+        actx.target = actx.cycles;
+}
 #endif
 
 A26State a26;
@@ -56,6 +69,8 @@ void a26_reset(void)
     actx.mirror = 1;
     actx.map_dirty = 1;
     actx.bank_on_tia = (u8)cart_tia_hook;
+    actx.tia_direct = (u8)!cart_tia_hook;
+    actx.tiawr = asm_tia_write;
     cpu_asm_build_map = build_asm_map;
     cpu_asm_map_changed = cart_asm_map_changed;
 #endif

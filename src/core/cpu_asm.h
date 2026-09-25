@@ -19,6 +19,8 @@
  *     "slow page": the access goes through rd()/wr() (TIA, RIOT, hotspots,
  *     cartridge RAM).
  *   - zero page $80-$FF and the stack go straight to RAM.
+ *   - TIA writes ($00-$7F with A12=0, not for 3F carts) call tiawr()
+ *     directly, bypassing bus decoding and bankswitch checks.
  *   - opcodes not implemented in assembler call step(), which executes a
  *     single instruction with the C core (cpu.c).
  *
@@ -47,10 +49,11 @@ typedef struct {
     u8  map_dirty;                           /* 57: C side: rebuild map[] before running */
     u16 tmp, tmp2;                           /* 58, 60: scratch */
     u8  bank_on_tia;                         /* 62: C side: TIA writes can switch banks (3F) */
-    u8  pad1;
+    u8  tia_direct;                          /* 63: TIA writes go straight to tiawr() */
     u32 pcbias;                              /* 64: PC = (a3 - pcbias) & $FFFF */
     u32 pcend;                               /* 68: end of the fast code page, 0 = slow/invalid */
     u32 map[256];                            /* 72 */
+    void (*tiawr)(u32 addr, u32 val);        /* 1096: TIA write fast path */
 } AsmCpu;
 
 extern AsmCpu actx;

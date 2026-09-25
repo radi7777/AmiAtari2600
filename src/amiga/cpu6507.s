@@ -47,7 +47,9 @@ C_TMP    equ 58          ; word: TMP = high byte, TMP+1 = low byte
 C_TMP2   equ 60
 C_PCBIAS equ 64          ; PC = (a3 - C_PCBIAS) & $FFFF
 C_PCEND  equ 68          ; end of the current fast code page, 0 = slow mode
+C_TIADIR equ 63          ; byte: TIA writes may use C_TIAWR
 C_MAP    equ 72
+C_TIAWR  equ 1096        ; void tiawr(u32 addr, u32 val)
 
 ; ======================================================================
 ; macros
@@ -129,7 +131,7 @@ ZPWRITE macro
         addq.l  #1,d5
         bra.s   .d\@
 .s\@:
-        bsr     slow_write
+        bsr     zp_tia_write
 .d\@:
         endm
 
@@ -436,6 +438,14 @@ slow_write:
         tst.b   C_MIRROR(a4)
         beq.s   .call
         move.w  d0,a0
+        and.w   #$1080,d0               ; A12=0, A7=0: TIA
+        bne.s   .nottia
+        tst.b   C_TIADIR(a4)
+        beq.s   .nottia
+        move.w  a0,d0
+        bra     tia_write_direct
+.nottia:
+        move.w  a0,d0
         and.w   #$1280,d0
         cmp.w   #$0080,d0
         beq.s   .ram
@@ -453,6 +463,26 @@ slow_write:
         move.l  d1,-(sp)
         move.l  d0,-(sp)
         move.l  C_WR(a4),a0
+        jsr     (a0)
+        addq.l  #8,sp
+        move.l  C_CYC(a4),d5
+        rts
+
+; zero page write below $80 (d0 = $00-$7F): the TIA in 2600 mode
+zp_tia_write:
+        tst.b   C_TIADIR(a4)
+        beq     slow_write
+        tst.b   C_MIRROR(a4)
+        beq     slow_write
+        ; fall through
+
+; d0.l = TIA address, d1.b = value: straight to tia_write (via C_TIAWR)
+tia_write_direct:
+        move.l  d5,C_CYC(a4)
+        and.l   #$ff,d1
+        move.l  d1,-(sp)
+        move.l  d0,-(sp)
+        move.l  C_TIAWR(a4),a0
         jsr     (a0)
         addq.l  #8,sp
         move.l  C_CYC(a4),d5

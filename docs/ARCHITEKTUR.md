@@ -125,10 +125,10 @@ nach Bankwechseln neu gebaut.
 Gemessen mit `make m68k-profile`: ausgeführte 68k-Befehle pro emuliertem Frame
 (gcc -O2 -m68030, qemu-m68k; ohne Amiga-Bildkonvertierung und Chip-RAM):
 
-| Test-ROM | Anfang (C-CPU) | asm-CPU | + neuer TIA-Renderer | + PC als Zeiger |
-|---|---|---|---|---|
-| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, 2 TIA-Writes/Zeile) | 961.000 | 648.000 | 537.000 | **467.000** |
-| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 | 273.000 | **264.000** |
+| Test-ROM | Anfang (C-CPU) | asm-CPU | + neuer TIA-Renderer | + PC als Zeiger | + direkte TIA-Writes |
+|---|---|---|---|---|---|
+| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, 2 TIA-Writes/Zeile) | 961.000 | 648.000 | 537.000 | 467.000 | **443.000** |
+| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 | 273.000 | 264.000 | **249.000** |
 
 Budget für 60 fps: etwa 130.000–200.000 Befehle pro Frame auf einem 68030 mit 50 MHz
 (bei ~4–6 Takten pro Befehl), die Hälfte bei 25 MHz.
@@ -160,25 +160,28 @@ anfangs waren es ~100 mit dem C-Kern und ~40 mit dem ersten asm-Kern.
 
 ### Wo die Zeit jetzt hingeht (asm-CPU)
 
-- `busy_ntsc`:
-  - TIA-Rendering (`update_to` inkl. Playfield) ~47 %
-  - Dispatch-Schleife (`loop`) ~13 %
-  - Weg eines TIA-Writes (asm → `slow_write` → `cb_write` → `bus_write` → `tia_write`)
-    ~17 %
-  - Opcodes der Rest
-- `bars_ntsc`: Playfield ~25 %, Objektpixel (`eval_pixels`) ~17 %
+`busy_ntsc`, pro Frame (~1.050 TIA-Writes, 3 Render-Abschnitte pro Zeile):
+- Playfield füllen ~155.000 (≈ 600 pro Zeile). Die Blockschleife selbst braucht ~6 Befehle
+  pro 4-Pixel-Block; der Rest sind Aufbau und Ränder je Abschnitt.
+- Dispatch-Schleife ~59.000
+- TIA-Write-Pfad ~100.000: `tia_write`, `update_to` und `render` je ~33.000;
+  `asm_tia_write`, `write_class` und `tia_write_direct` zusammen ~30.000
+- Opcodes der Rest
+
+TIA-Writes gehen aus dem asm-Kern direkt an `tia_write`, ohne `bus_write` und ohne
+Bankwechsel-Prüfung. Ausnahme sind 3F-Carts, bei denen TIA-Writes die Bank umschalten.
 
 ### Nächste Schritte, nach Hebelwirkung geordnet
 
-1. **TIA-Writes direkt aus Assembler:** Zero-Page-Writes nach $00–$3F sofort an
-   `tia_write` statt über `slow_write` → `cb_write` → `bus_write`.
-2. **Hotspot-Seite $1Fxx** nur für $1FE0–$1FFF langsam behandeln. Viele Spiele haben
-   Code in der letzten Seite, der im Moment im langsamen Modus läuft.
+1. **Hotspot-Seite $1Fxx** nur für $1FE0–$1FFF langsam behandeln. Viele Spiele haben
+   Code in der letzten Seite, der im Moment komplett im langsamen Modus läuft.
+2. **Frameskip ohne Pixelarbeit:** In übersprungenen Frames nur Kollisionen berechnen.
+   Das spart das Playfield-Füllen vollständig und bringt am meisten, sobald Frameskip
+   ohnehin nötig ist.
 3. **Unveränderte Zeilen erkennen:** Zeilen mit gleichem Registerverlauf wie im
    Vorframe nicht neu zeichnen; den Amiga-seitigen Vergleich für C2P gibt es schon.
    Die Kollisionen müssen dabei weiter stimmen.
-4. **Frameskip ohne Pixelarbeit:** In übersprungenen Frames nur Kollisionen berechnen.
-5. **Auf echter Hardware messen** (`BENCH=500`, `PROFILE`): qemu zählt Befehle, keine
+4. **Auf echter Hardware messen** (`BENCH=500`, `PROFILE`): qemu zählt Befehle, keine
    Takte. Chip-RAM-Zugriffe und die 256-Byte-Caches des 68030 kann nur echte Hardware
    bzw. WinUAE im Cycle-Exact-Modus zeigen.
 

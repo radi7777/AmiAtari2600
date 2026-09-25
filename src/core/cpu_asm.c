@@ -21,6 +21,7 @@ typedef char check_flags[(sizeof(void *) != 4 || offsetof(AsmCpu, fc) == 52) ? 1
 typedef char check_tmp[(sizeof(void *) != 4 || offsetof(AsmCpu, tmp) == 58) ? 1 : -1];
 typedef char check_pc[(sizeof(void *) != 4 || offsetof(AsmCpu, pcbias) == 64) ? 1 : -1];
 typedef char check_map[(sizeof(void *) != 4 || offsetof(AsmCpu, map) == 72) ? 1 : -1];
+typedef char check_tia[(sizeof(void *) != 4 || offsetof(AsmCpu, tiawr) == 1096) ? 1 : -1];
 
 /* only cartridge accesses (and, for 3F, TIA writes) can switch banks */
 static void after_io(u32 addr)
