@@ -1,0 +1,7 @@
+build/
+roms/
+*.o
+*.ppm
+*.wav
+.DS_Store
+.vscode/
