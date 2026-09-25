@@ -39,7 +39,7 @@ void a26_reset(void)
     riot_reset();
     tia_reset();
     cpu_reset();
-    a26.lines_avg = 262;
+    a26.lines_avg = (a26.region == REGION_PAL) ? 312 : 262;
     a26.frames = 0;
     region_votes = 0;
 }

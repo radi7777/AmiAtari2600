@@ -1,0 +1,43 @@
+# AmiAtari2600 - Amiga build with vbcc (cross from macOS/Linux or native).
+#
+#   make -f Makefile.amiga                 # -> build/amiga/A26
+#   make -f Makefile.amiga NDK_INC=/path/to/NDK3.2/Include_H
+#
+# Needs vbcc with the m68k-amigaos target ($VBCC set, vc in PATH) and the
+# AmigaOS NDK (3.1 or 3.2) include files, unless your vbcc config already
+# adds them.
+
+VC       ?= vc
+CONFIG   ?= +aos68k
+CPU      ?= -cpu=68030
+# The core uses no floating point; -fpu=68882 only matters for future code.
+FPU      ?=
+OPT      ?= -O2 -speed
+NDK_INC  ?=
+OUT      := build/amiga
+
+CFLAGS   := $(CONFIG) -c99 $(CPU) $(FPU) $(OPT) -DA26_BIG_ENDIAN
+ifneq ($(NDK_INC),)
+CFLAGS   += -I$(NDK_INC)
+endif
+
+CORE_SRC  := src/core/cpu.c src/core/bus.c src/core/tia.c src/core/riot.c \
+             src/core/cart.c src/core/atari.c src/core/palette.c
+AMIGA_SRC := src/amiga/main_amiga.c src/amiga/hw.c src/amiga/video.c \
+             src/amiga/vidconv.c src/amiga/audio.c src/amiga/input.c
+
+OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC) $(AMIGA_SRC))
+
+.PHONY: all clean
+
+all: $(OUT)/A26
+
+$(OUT)/A26: $(OBJ)
+	$(VC) $(CONFIG) $(CPU) -o $@ $(OBJ)
+
+$(OUT)/%.o: src/%.c src/core/*.h src/amiga/*.h
+	@mkdir -p $(dir $@)
+	$(VC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(OUT)

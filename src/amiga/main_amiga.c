@@ -1,0 +1,263 @@
+/*
+ * main_amiga.c - AmiAtari2600 for AmigaOS 2.0+/3.x on 68030 + ECS.
+ *
+ * Usage (CLI):
+ *   A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n]
+ *             [PORT1] [NOSOUND]
+ *
+ *   PAL / NTSC     force the region instead of detecting it
+ *   COLORS=...     force the palette (e.g. PAL60 games: NTSC timing, PAL colours)
+ *   TYPE=...       force the bankswitching scheme
+ *   SKIP=n         render only every (n+1)th frame (default: automatic)
+ *   PORT1          use the joystick in the mouse port as player 2
+ *   NOSOUND        no Paula output
+ *
+ * Keys: ESC quit, F1 Game Reset, F2 Game Select, F3 colour/B&W,
+ *       F4/F5 left/right difficulty, F6 region auto/NTSC/PAL,
+ *       P pause, HELP hard reset.
+ *       Cursor keys + Space/Alt = player 1 joystick.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <proto/exec.h>
+
+#include "hw.h"
+#include "video.h"
+#include "audio.h"
+#include "input.h"
+#include "../core/atari.h"
+
+#define VERSION "0.1"
+
+static const char vers[] = "$VER: A26 " VERSION " (" __DATE__ ")";
+
+static struct {
+    const char *rom;
+    int region;         /* -1 auto */
+    int colors;         /* -1 follow region */
+    CartType type;
+    int skip;           /* -1 auto */
+    int port1;
+    int nosound;
+} opt;
+
+static int display_pal;
+static int vstart = -1, vstart_pending = -1, vstart_count;
+
+static int streq_nocase(const char *a, const char *b)
+{
+    while (*a && *b) {
+        char x = *a++, y = *b++;
+        if (x >= 'a' && x <= 'z') x -= 32;
+        if (y >= 'a' && y <= 'z') y -= 32;
+        if (x != y) return 0;
+    }
+    return *a == *b;
+}
+
+static int parse_args(int argc, char **argv)
+{
+    int i;
+    opt.region = -1;
+    opt.colors = -1;
+    opt.type = CART_UNKNOWN;
+    opt.skip = -1;
+    for (i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (streq_nocase(a, "PAL")) opt.region = REGION_PAL;
+        else if (streq_nocase(a, "NTSC")) opt.region = REGION_NTSC;
+        else if (streq_nocase(a, "COLORS=PAL")) opt.colors = REGION_PAL;
+        else if (streq_nocase(a, "COLORS=NTSC")) opt.colors = REGION_NTSC;
+        else if (strncmp(a, "TYPE=", 5) == 0 || strncmp(a, "type=", 5) == 0) {
+            opt.type = cart_type_from_name(a + 5);
+            if (opt.type == CART_UNKNOWN) { printf("unknown cartridge type %s\n", a + 5); return -1; }
+        }
+        else if (strncmp(a, "SKIP=", 5) == 0 || strncmp(a, "skip=", 5) == 0) opt.skip = atoi(a + 5);
+        else if (streq_nocase(a, "PORT1")) opt.port1 = 1;
+        else if (streq_nocase(a, "NOSOUND")) opt.nosound = 1;
+        else if (!opt.rom) opt.rom = a;
+        else { printf("unknown option %s\n", a); return -1; }
+    }
+    if (!opt.rom) {
+        printf("A26 %s - Atari 2600 emulator for Amiga 68030/ECS\n"
+               "usage: A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|F4|...]\n"
+               "           [SKIP=n] [PORT1] [NOSOUND]\n", VERSION);
+        return -1;
+    }
+    return 0;
+}
+
+static u8 *load_rom(const char *name, u32 *size)
+{
+    FILE *f = fopen(name, "rb");
+    u8 *buf = NULL;
+    long n;
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n > 0 && n <= 512L * 1024L) {
+        buf = (u8 *)malloc((size_t)n);
+        if (buf && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); buf = NULL; }
+    }
+    fclose(f);
+    *size = (u32)n;
+    return buf;
+}
+
+/* program display + audio for the current emulated region */
+static void apply_mode(void)
+{
+    int want_pal = (a26.region == REGION_PAL);
+    int colours = (opt.colors >= 0) ? opt.colors : want_pal;
+
+    hw_wait_vbl();
+    display_pal = hw_set_pal(want_pal);
+    video_set_mode(display_pal, colours);
+    if (!opt.nosound) audio_start(display_pal);
+    vstart = -1;
+}
+
+/* choose the first TIA line shown, centring the game's visible area.
+ * Changes are only taken over when stable, so games that vary their
+ * VBLANK length slightly do not make the picture jump. */
+static int choose_vstart(void)
+{
+    int h = video_height();
+    int first = tia.first_visible, last = tia.last_visible, want;
+
+    if (first < 0 || last < first) {
+        want = (a26.region == REGION_PAL) ? 48 : 36;
+    } else {
+        int vis = last - first + 1;
+        want = (vis >= h) ? first : first - (h - vis) / 2;
+    }
+    if (want > TIA_FB_LINES - h) want = TIA_FB_LINES - h;
+    if (want < 0) want = 0;
+
+    if (vstart < 0) {
+        vstart = want;
+    } else if (want != vstart) {
+        if (want == vstart_pending) {
+            if (++vstart_count >= 30) vstart = want;
+        } else {
+            vstart_pending = want;
+            vstart_count = 0;
+        }
+    }
+    return vstart;
+}
+
+static void run(void)
+{
+    u8 switches = 0;
+    int bw = 0, diff0 = 0, diff1 = 0, paused = 0;
+    int skip_count = 0, late = 0;
+
+    input_init();
+    apply_mode();
+
+    for (;;) {
+        u8 joy0, joy1 = 0;
+
+        input_poll();
+        if (key_down(KEY_ESC)) break;
+        if (key_pressed(KEY_P)) {
+            paused = !paused;
+            if (!opt.nosound) { if (paused) audio_stop(); else audio_start(display_pal); }
+        }
+        if (key_pressed(KEY_HELP)) a26_reset();
+        if (key_pressed(KEY_F3)) bw = !bw;
+        if (key_pressed(KEY_F4)) diff0 = !diff0;
+        if (key_pressed(KEY_F5)) diff1 = !diff1;
+        if (key_pressed(KEY_F6)) {
+            /* auto -> NTSC -> PAL -> auto */
+            if (!a26.region_forced) a26_force_region(REGION_NTSC);
+            else if (a26.region == REGION_NTSC) a26_force_region(REGION_PAL);
+            else a26_force_region(-1);
+        }
+        if (paused) { hw_wait_vbl(); continue; }
+
+        switches = 0;
+        if (key_down(KEY_F1)) switches |= SW_RESET;
+        if (key_down(KEY_F2)) switches |= SW_SELECT;
+        if (bw) switches |= SW_BW;
+        if (diff0) switches |= SW_DIFF_P0;
+        if (diff1) switches |= SW_DIFF_P1;
+        a26_set_switches(switches);
+
+        joy0 = joy_read(1);
+        if (key_down(KEY_UP)) joy0 |= JOY_UP;
+        if (key_down(KEY_DOWN)) joy0 |= JOY_DOWN;
+        if (key_down(KEY_LEFT)) joy0 |= JOY_LEFT;
+        if (key_down(KEY_RIGHT)) joy0 |= JOY_RIGHT;
+        if (key_down(KEY_SPACE) || key_down(KEY_LALT) || key_down(KEY_RALT)) joy0 |= JOY_FIRE;
+        if (opt.port1) joy1 = joy_read(0);
+        a26_set_joystick(0, joy0);
+        a26_set_joystick(1, joy1);
+
+        a26_run_frame();
+
+        if (a26.region_changed) {
+            a26.region_changed = 0;
+            apply_mode();
+        }
+        if (!opt.nosound) audio_frame();
+
+        /* frame skipping: fixed (SKIP=n) or automatic when we missed the
+         * previous vertical blank (at most 2 frames in a row) */
+        if ((opt.skip > 0 && skip_count < opt.skip) ||
+            (opt.skip < 0 && late && skip_count < 2)) {
+            skip_count++;
+            late = 0;
+            continue;
+        }
+        skip_count = 0;
+        video_render(a26_framebuffer(), TIA_FB_LINES, choose_vstart());
+        late = video_present();
+    }
+}
+
+int main(int argc, char **argv)
+{
+    u8 *rom;
+    u32 size;
+    int err, i;
+
+    (void)vers;
+    if (argc == 0) return 0;                 /* started from Workbench: not yet supported */
+    if (parse_args(argc, argv)) return 5;
+
+    rom = load_rom(opt.rom, &size);
+    if (!rom) { printf("cannot load %s\n", opt.rom); return 10; }
+    err = a26_load(rom, size, opt.type);
+    if (err) { printf("unsupported ROM (%lu bytes, error %d)\n", (unsigned long)size, err); free(rom); return 10; }
+    if (opt.region >= 0) a26_force_region(opt.region);
+
+    if (hw_init()) { printf("cannot open graphics.library\n"); free(rom); return 20; }
+
+    /* run a few frames blind to detect PAL/NTSC before opening the display */
+    for (i = 0; i < 20; i++) a26_run_frame();
+    a26.region_changed = 0;
+
+    printf("A26 %s: %s, %lu bytes, %s, %s (%d lines)%s\n", VERSION, opt.rom,
+           (unsigned long)size, cart_type_name(cart.type),
+           a26.region == REGION_PAL ? "PAL" : "NTSC", a26.lines_avg,
+           hwinfo.ecs ? "" : "\n  note: OCS Agnus, no PAL/NTSC switching (needs 8372A)");
+
+    if (video_init()) { printf("not enough chip memory\n"); hw_cleanup(); free(rom); return 20; }
+    if (!opt.nosound && audio_init()) opt.nosound = 1;
+
+    a26_reset();
+    hw_takeover();
+    run();
+    if (!opt.nosound) audio_stop();
+    hw_restore();
+
+    audio_free();
+    video_free();
+    hw_cleanup();
+    free(rom);
+    return 0;
+}
