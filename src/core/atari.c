@@ -21,7 +21,9 @@ static void build_asm_map(AsmCpu *c)
 
 A26State a26;
 
-static u8 framebuffer[TIA_FB_LINES * TIA_WIDTH];
+/* u32 array: the TIA writes whole playfield blocks as aligned longwords */
+static u32 framebuffer32[TIA_FB_LINES * TIA_WIDTH / 4];
+#define framebuffer ((u8 *)framebuffer32)
 static u8 audiobuffer[2 * TIA_MAX_LINES];
 
 #define PAL_THRESHOLD   287     /* lines: >= PAL, < NTSC */
@@ -53,6 +55,7 @@ void a26_reset(void)
     actx.stack_base = actx.ram_base;
     actx.mirror = 1;
     actx.map_dirty = 1;
+    actx.bank_on_tia = (u8)cart_tia_hook;
     cpu_asm_build_map = build_asm_map;
     cpu_asm_map_changed = cart_asm_map_changed;
 #endif

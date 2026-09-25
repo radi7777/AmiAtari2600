@@ -19,7 +19,8 @@ src/amiga/     Amiga-Frontend (AmigaOS-Header, direkter Hardwarezugriff)
   input.c      Joystick (JOYxDAT/CIA) und Tastatur (CIA-Polling mit Handshake)
   main_amiga.c Kommandozeile, Hauptschleife, Frameskip
 src/host/      Testrahmen für Linux/macOS (PPM/WAV-Ausgabe)
-tests/         CPU-Test, Test-ROMs (eigener Assembler), Video-Konvertierungstest
+tests/         CPU-Test, Test-ROMs (eigener Assembler), Video-Konvertierungstest,
+               TIA-Äquivalenztest (optimierter gegen Referenz-Renderer)
 tools/         asm6502.py: kleiner 6502-Assembler für Test-ROMs
                qemu_icount.py: 68k-Befehle pro Frame/Funktion unter qemu-m68k zählen
 ```
@@ -116,39 +117,55 @@ nach Bankwechseln neu gebaut.
 Gemessen mit `make m68k-profile`: ausgeführte 68k-Befehle pro emuliertem Frame
 (gcc -O2 -m68030, qemu-m68k; ohne Amiga-Bildkonvertierung und Chip-RAM):
 
-| Test-ROM | C-CPU | asm-CPU |
-|---|---|---|
-| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, Playfield) | 961.000 | 648.000 |
-| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 |
+| Test-ROM | Anfang (C-CPU) | asm-CPU | + neuer TIA-Renderer |
+|---|---|---|---|
+| `busy_ntsc` (CPU-lastig, ~23 6502-Befehle/Zeile, 2 TIA-Writes/Zeile) | 961.000 | 648.000 | **537.000** |
+| `bars_ntsc` (Player-Sprite auf jeder Zeile, wenig CPU) | 1.035.000 | 1.019.000 | **273.000** |
 
 Budget für 60 fps: etwa 130.000–200.000 Befehle pro Frame auf einem 68030 mit 50 MHz
 (bei ~4–6 Takten pro Befehl), die Hälfte bei 25 MHz.
 
-Aufteilung beim asm-Kern (`busy_ntsc`):
-- ~40 % TIA-Rendering (`render`)
-- ~15 % Dispatch-Schleife (`loop`)
-- Rest: Opcodes, TIA-Register, Callbacks
+### TIA-Renderer
 
-Die CPU kostet im Moment rund 40 68k-Befehle pro 6502-Befehl, davon ~15 allein für
-Fetch und Dispatch.
+`render()` zeichnet einen Abschnitt in zwei Schritten:
 
-Nächste Schritte, nach Hebelwirkung geordnet:
-1. **TIA-Rendering umbauen.** Der Pixelpfad kostet 6–8 Befehle pro Pixel, hinzu kommen
-   ~50 Befehle Fixkosten pro `render`-Aufruf. Jeder TIA-Schreibzugriff mitten in der Zeile
-   erzeugt einen solchen Aufruf. Ziel: Zeilen nach Abschnitten und nicht nach Pixeln
-   rendern.
-   - Playfield/Hintergrund als 4-Pixel-Blöcke über Tabellen
-   - Objekte als 8-Pixel-Stempel
-   - Kollisionen per Bitmasken-UND nur dann berechnen, wenn sich Objekte auf der Zeile
-     überlappen können
-   - Registerwrites, die nichts Sichtbares ändern, ohne Rendern übernehmen
-2. **Fetch/Dispatch im asm-Kern verbilligen:**
+1. **Playfield/Hintergrund:** Das Playfield wechselt nur alle 4 Pixel. Ganze Blöcke
+   werden deshalb als ein Langwort geschrieben, mit einer mitlaufenden Bitmaske je
+   Bildhälfte.
+2. **Objekte als Stempel:** Nur in den vorberechneten Pixelbereichen der aktiven Objekte
+   (Kopien × Breite, direkt aus den Masken-Tabellen abgeleitet) läuft die volle
+   Prioritäts- und Kollisionslogik. Überall sonst ist das Ergebnis per Definition
+   Playfield oder Hintergrund ohne Kollision.
+
+Zusätzlich lösen Schreibzugriffe ohne sichtbare Wirkung (HMxx, HMCLR, unveränderte
+Farben/CTRLPF/ENAxx/VDEL/RESMP) kein Nachziehen des Strahls aus. Register mit
+Übernahmeverzögerung (PFx, NUSIZx, REFPx, VBLANK) sind davon ausgenommen: Ihr Nachziehen
+zeichnet ein paar Pixel voraus und verschiebt damit die Wirkung folgender Writes.
+
+Der alte Pixel-für-Pixel-Renderer bleibt als Referenz erhalten (`-DA26_TIA_REFERENCE`).
+`tests/tia_equiv.c` füttert beide mit zufälligen, 2600-typischen Schreibfolgen
+(40 Seeds × 60 Frames) und verlangt identische Pixel und identische Kollisionswerte.
+Jede weitere Optimierung muss diesen Test bestehen.
+
+### Wo die Zeit jetzt hingeht (asm-CPU)
+
+- `busy_ntsc`: CPU-Dispatch (`loop`) ~17 %, Opcodes ~30 %, Playfield ~20 %, der Weg
+  eines TIA-Writes (asm → `cb_write` → `bus_write` → `tia_write`) ~10 %
+- `bars_ntsc`: Playfield ~25 %, Objektpixel (`eval_pixels`) ~17 %
+
+### Nächste Schritte, nach Hebelwirkung geordnet
+
+1. **Fetch/Dispatch im asm-Kern:**
    - PC als Host-Zeiger (`move.b (a3)+,d0`), neu setzen nur bei Sprüngen und
      Seitenwechseln
-   - Hotspot-Seite $1Fxx nur für $1FE0–$1FFF langsam behandeln statt für die ganze Seite
-   - häufige TIA-Writes (WSYNC, Farben, GRPx) ohne den generischen C-Weg
-3. **Frameskip ohne Pixelarbeit:** In übersprungenen Frames nur Kollisionen berechnen.
-4. **Auf echter Hardware messen** (`BENCH=500`, `PROFILE`): qemu zählt Befehle, keine
+   - Hotspot-Seite $1Fxx nur für $1FE0–$1FFF langsam behandeln
+2. **TIA-Writes direkt aus Assembler:** Zero-Page-Writes nach $00–$3F sofort an
+   `tia_write` statt über `cb_write` → `bus_write`.
+3. **Unveränderte Zeilen erkennen:** Zeilen mit gleichem Registerverlauf wie im
+   Vorframe nicht neu zeichnen; den Amiga-seitigen Vergleich für C2P gibt es schon.
+   Die Kollisionen müssen dabei weiter stimmen.
+4. **Frameskip ohne Pixelarbeit:** In übersprungenen Frames nur Kollisionen berechnen.
+5. **Auf echter Hardware messen** (`BENCH=500`, `PROFILE`): qemu zählt Befehle, keine
    Takte. Chip-RAM-Zugriffe und die 256-Byte-Caches des 68030 kann nur echte Hardware
    bzw. WinUAE im Cycle-Exact-Modus zeigen.
 

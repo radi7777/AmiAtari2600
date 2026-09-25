@@ -78,6 +78,10 @@ typedef struct {
     u8  gp0, gp1;           /* current player graphics incl. VDEL + reflect */
     u8  m0_on, m1_on, bl_on;
     const u8 *p0_mask, *p1_mask, *m0_mask, *m1_mask, *bl_mask;
+    /* pixel runs (offset, length pairs relative to the object position)
+     * where the object can draw: P0, P1, M0, M1, BL */
+    const u8 *runs[5];
+    u8  nruns[5];
     const u8 *prio;         /* 64-entry object->colour index table */
     u8  col_l[5], col_r[5]; /* colour per index for left/right half */
     u8  hmove_blank;
@@ -99,6 +103,7 @@ typedef struct {
 
 extern Tia tia;
 
+/* framebuffer: TIA_FB_LINES * TIA_WIDTH bytes, must be 4-byte aligned */
 void tia_init(u8 *framebuffer, u8 *audiobuffer);
 void tia_reset(void);
 u8   tia_read(u16 addr);

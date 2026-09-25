@@ -7,6 +7,7 @@ B=build
 A26HOST=${A26HOST:-$B/a26host}
 CPUTEST=${CPUTEST:-$B/cpu_functional}
 VIDTEST=${VIDTEST:-$B/vidconv_test}
+TIATEST=${TIATEST:-$B/tia_equiv}
 FAILS=0
 
 ok()   { echo "  ok   $1"; }
@@ -47,6 +48,9 @@ echo "$out" | grep -q "region: PAL  lines: 312" && ok "PAL detected from 312 lin
 out=$($A26HOST $B/bank_f8.bin -frames 30 -ppm $B/bank_f8.ppm -q)
 echo "$out" | grep -q "type: F8" && ok "F8 autodetected" || fail "F8 detection: $out"
 python3 tests/check.py row $B/bank_f8.ppm 50 0:2d32b8 159:2d32b8 && ok "F8 bank switch" || fail "F8 bank switch"
+
+echo "== TIA renderer (optimised vs. reference per-pixel renderer)"
+if $TIATEST; then ok "tia_equiv"; else fail "tia_equiv"; fi
 
 echo "== Amiga video conversion (copper palette + c2p, simulated)"
 if $VIDTEST $B/bars_ntsc.bin; then ok "vidconv"; else fail "vidconv"; fi

@@ -21,10 +21,11 @@ typedef char check_flags[(sizeof(void *) != 4 || offsetof(AsmCpu, fc) == 52) ? 1
 typedef char check_tmp[(sizeof(void *) != 4 || offsetof(AsmCpu, tmp) == 58) ? 1 : -1];
 typedef char check_map[(sizeof(void *) != 4 || offsetof(AsmCpu, map) == 64) ? 1 : -1];
 
-static void after_io(void)
+/* only cartridge accesses (and, for 3F, TIA writes) can switch banks */
+static void after_io(u32 addr)
 {
     actx.cycles = a26_cycles;
-    if (cpu_asm_map_changed && cpu_asm_map_changed())
+    if (((addr & 0x1000) || actx.bank_on_tia) && cpu_asm_map_changed && cpu_asm_map_changed())
         cpu_asm_build_map(&actx);
     if (a26_stop || cpu.jammed)
         actx.target = actx.cycles;      /* leave the core after this instruction */
@@ -35,7 +36,7 @@ static u32 cb_read(u32 addr)
     u8 v;
     a26_cycles = actx.cycles;
     v = bus_read((u16)addr);
-    after_io();
+    after_io(addr);
     return v;
 }
 
@@ -43,7 +44,7 @@ static void cb_write(u32 addr, u32 val)
 {
     a26_cycles = actx.cycles;
     bus_write((u16)addr, (u8)val);
-    after_io();
+    after_io(addr);
 }
 
 /* execute one instruction with the C core */
@@ -63,7 +64,7 @@ static void cb_step(void)
     actx.s = cpu.s;
     actx.pc = cpu.pc;
     actx.p = cpu_get_p();
-    after_io();
+    after_io(0x1000);           /* the instruction may have touched anything */
 }
 
 u32 cpu_asm_run(u32 target)

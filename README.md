@@ -11,7 +11,7 @@ Projektziele und Hintergrund stehen in [docs/PROJEKT.md](docs/PROJEKT.md), der A
 |---|---|
 | 6507-CPU in C (inkl. illegaler Opcodes) | fertig, besteht Klaus Dormanns 6502-Funktionstest |
 | 6507-CPU in 68k-Assembler (`src/amiga/cpu6507.s`) | 135 Opcodes in Assembler, Rest über den C-Kern; besteht den Dormann-Test unter qemu-m68k, rendert identisch zum C-Kern |
-| TIA-Video (Playfield, Player, Missiles, Ball, Kollisionen, HMOVE, VDEL) | fertig, farbtaktgenaues Catch-up-Rendering |
+| TIA-Video (Playfield, Player, Missiles, Ball, Kollisionen, HMOVE, VDEL) | fertig, farbtaktgenaues Catch-up-Rendering; optimierter Renderer (Playfield-Blöcke + Objekt-Stempel), per Fuzz-Test identisch zum Referenz-Renderer |
 | TIA-Audio | fertig (Schaltungsmodell, 1 Sample pro Scanline) |
 | RIOT (RAM, Timer, Ports) | fertig |
 | Bankswitching | 2K, 4K, F8, F6, F4, F8SC, F6SC, F4SC, FA, E0, E7, 3F, FE, mit Auto-Erkennung |
@@ -33,7 +33,7 @@ Performance-Stand und Plan: siehe [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md#perf
 
 ```sh
 make            # build/a26host
-make test       # CPU-Test, Test-ROMs, Video-Konvertierung
+make test       # CPU-Test, Test-ROMs, TIA-Äquivalenz, Video-Konvertierung
 ./build/a26host roms/spiel.bin -frames 300 -ppm shot.ppm -wav sound.wav
 ```
 

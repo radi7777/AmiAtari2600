@@ -36,7 +36,9 @@ typedef struct {
     u8  fc, fv, fd, fi;                      /* 52: flags while running */
     u8  mirror;                              /* 56: 1 = 2600 RAM mirroring in slow path */
     u8  map_dirty;                           /* 57: C side: rebuild map[] before running */
-    u16 tmp, tmp2, pad1;                     /* 58, 60, 62: scratch */
+    u16 tmp, tmp2;                           /* 58, 60: scratch */
+    u8  bank_on_tia;                         /* 62: C side: TIA writes can switch banks (3F) */
+    u8  pad1;
     u32 map[256];                            /* 64 */
 } AsmCpu;
 

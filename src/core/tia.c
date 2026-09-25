@@ -11,6 +11,18 @@
  * Stella): for every object a pointer into a 320-entry table is kept so
  * that mask[x] tells whether/which graphics bit is visible at pixel x.
  *
+ * Rendering a span works in two passes (see render()):
+ *   1. playfield + background in 4-pixel blocks (the playfield only
+ *      changes every 4 pixels),
+ *   2. the objects are "stamped" on top: for every active object only its
+ *      pixel runs (copies x width, derived from the mask tables) get the
+ *      full priority/collision evaluation. Everywhere else the result is by
+ *      definition playfield or background without collisions.
+ * Writes that have no visible effect (HMxx, HMCLR, unchanged values) do
+ * not advance the beam at all. The original per-pixel renderer is kept as
+ * a reference (A26_TIA_REFERENCE) and tests/tia_equiv.c checks that both
+ * produce identical pixels and collisions.
+ *
  * Audio is clocked twice per scanline (31.4 kHz); one summed sample per
  * scanline is stored (~15.7 kHz), which maps 1:1 to one Paula sample per
  * Amiga raster line.
@@ -31,6 +43,17 @@ static u8  reverse_bits[256];
 static u8  prio_table[2][64];       /* [pfp][objects] -> colour index */
 static u16 coll_table[64];
 static int tables_ready;
+
+/* pixel runs of each mask table: (offset, length) pairs, offset relative to
+ * the object position. At most 3 copies -> 3 runs. */
+#define MAX_RUNS 3
+static u8  player_runs[8][MAX_RUNS * 2], player_nruns[8];
+static u8  missile_runs[8][4][MAX_RUNS * 2], missile_nruns[8][4];
+static u8  ball_runs[4][2], ball_nruns[4];
+
+#ifdef A26_TIA_REFERENCE
+int tia_use_reference;          /* 1 = original per-pixel renderer */
+#endif
 
 /* object bits used for the 6-bit "enabled" index */
 #define O_PF 0x01
@@ -68,6 +91,26 @@ static int copy_at(int mode, int offset)
     case 64: return mode == 4 || mode == 6;
     }
     return 0;
+}
+
+/* runs of non-zero entries in mask[0..159] -> (offset, length) pairs */
+static u8 find_runs(const u8 *mask, u8 *runs)
+{
+    int k = 0, n = 0;
+    while (k < TIA_WIDTH) {
+        if (mask[k]) {
+            int start = k;
+            while (k < TIA_WIDTH && mask[k]) k++;
+            if (n < MAX_RUNS) {
+                runs[n * 2] = (u8)start;
+                runs[n * 2 + 1] = (u8)(k - start);
+            }
+            n++;
+        } else {
+            k++;
+        }
+    }
+    return (u8)n;
 }
 
 static void build_tables(void)
@@ -165,6 +208,13 @@ static void build_tables(void)
 #undef BOTH
         coll_table[obj] = c;
     }
+    for (mode = 0; mode < 8; mode++) {
+        player_nruns[mode] = find_runs(player_mask[mode], player_runs[mode]);
+        for (size = 0; size < 4; size++)
+            missile_nruns[mode][size] = find_runs(missile_mask[mode][size], missile_runs[mode][size]);
+    }
+    for (size = 0; size < 4; size++)
+        ball_nruns[size] = find_runs(ball_mask[size], ball_runs[size]);
     tables_ready = 1;
 }
 
@@ -175,6 +225,8 @@ static void upd_p0(void)
     u8 g = tia.vdelp0 ? tia.grp0_old : tia.grp0_new;
     tia.gp0 = tia.refp0 ? reverse_bits[g] : g;
     tia.p0_mask = &player_mask[tia.nusiz0 & 7][TIA_WIDTH - tia.pos_p0];
+    tia.runs[0] = player_runs[tia.nusiz0 & 7];
+    tia.nruns[0] = player_nruns[tia.nusiz0 & 7];
 }
 
 static void upd_p1(void)
@@ -182,24 +234,32 @@ static void upd_p1(void)
     u8 g = tia.vdelp1 ? tia.grp1_old : tia.grp1_new;
     tia.gp1 = tia.refp1 ? reverse_bits[g] : g;
     tia.p1_mask = &player_mask[tia.nusiz1 & 7][TIA_WIDTH - tia.pos_p1];
+    tia.runs[1] = player_runs[tia.nusiz1 & 7];
+    tia.nruns[1] = player_nruns[tia.nusiz1 & 7];
 }
 
 static void upd_m0(void)
 {
     tia.m0_on = tia.enam0 && !tia.resmp0;
     tia.m0_mask = &missile_mask[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3][TIA_WIDTH - tia.pos_m0];
+    tia.runs[2] = missile_runs[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3];
+    tia.nruns[2] = missile_nruns[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3];
 }
 
 static void upd_m1(void)
 {
     tia.m1_on = tia.enam1 && !tia.resmp1;
     tia.m1_mask = &missile_mask[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3][TIA_WIDTH - tia.pos_m1];
+    tia.runs[3] = missile_runs[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3];
+    tia.nruns[3] = missile_nruns[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3];
 }
 
 static void upd_bl(void)
 {
     tia.bl_on = tia.vdelbl ? tia.enabl_old : tia.enabl_new;
     tia.bl_mask = &ball_mask[(tia.ctrlpf >> 4) & 3][TIA_WIDTH - tia.pos_bl];
+    tia.runs[4] = ball_runs[(tia.ctrlpf >> 4) & 3];
+    tia.nruns[4] = ball_nruns[(tia.ctrlpf >> 4) & 3];
 }
 
 static void upd_pf(void)
@@ -299,7 +359,8 @@ static void audio_line(void)
 
 /* ---- rendering -------------------------------------------------------- */
 
-static u8 scratch_line[TIA_WIDTH];
+static u32 scratch_line32[TIA_WIDTH / 4];   /* lines beyond the framebuffer */
+#define scratch_line ((u8 *)scratch_line32)
 
 static u8 *line_ptr(void)
 {
@@ -308,8 +369,9 @@ static u8 *line_ptr(void)
     return scratch_line;
 }
 
-/* draw pixels [x0, x1) of the current line */
-static void render(int x0, int x1)
+#ifdef A26_TIA_REFERENCE
+/* original per-pixel renderer, kept as reference for tests/tia_equiv.c */
+static void render_ref(int x0, int x1)
 {
     u8 *out = line_ptr();
     int x;
@@ -374,6 +436,145 @@ static void render(int x0, int x1)
         }
         tia.coll = coll;
     }
+}
+
+#endif
+
+static u32 rep4(u8 c)
+{
+    u32 v = c;
+    v |= v << 8;
+    return v | (v << 16);
+}
+
+/* playfield + background for [x0, x1).
+ * The playfield has 40 blocks of 4 pixels: blocks 0-19 show pf bits 0-19,
+ * blocks 20-39 show bits 0-19 again (bits 19-0 when reflected). Whole
+ * blocks are written as one longword (line buffers are 4-byte aligned). */
+static void fill_playfield(u8 *out, int x0, int x1)
+{
+    const u32 pf = tia.pf;
+    const int reflect = tia.ctrlpf & 1;
+    const u8 cbk = tia.colubk, cl = tia.col_l[C_PF], cr = tia.col_r[C_PF];
+    int x = x0, blk, last;
+    u32 *o, bk4, l4, r4;
+
+    if (!pf) {                                  /* no playfield: plain fill */
+        memset(out + x0, cbk, (size_t)(x1 - x0));
+        return;
+    }
+#define PF_ON(b) (((b) < 20) ? (pf >> (b)) & 1 : (pf >> (reflect ? 39 - (b) : (b) - 20)) & 1)
+    while (x < x1 && (x & 3)) {                 /* unaligned head */
+        out[x] = PF_ON(x >> 2) ? ((x < 80) ? cl : cr) : cbk;
+        x++;
+    }
+    if (x >= x1) return;
+    bk4 = rep4(cbk);
+    l4 = rep4(cl);
+    r4 = rep4(cr);
+    o = (u32 *)(void *)(out + x);
+    last = x1 >> 2;                             /* first block not fully inside */
+    blk = x >> 2;
+    if (blk < 20) {                             /* left half: bits 0..19 */
+        int end = last < 20 ? last : 20;
+        u32 m = pf >> blk;
+        for (; blk < end; blk++, m >>= 1)
+            *o++ = (m & 1) ? l4 : bk4;
+    }
+    if (blk < last) {                           /* right half */
+        if (!reflect) {
+            u32 m = pf >> (blk - 20);
+            for (; blk < last; blk++, m >>= 1)
+                *o++ = (m & 1) ? r4 : bk4;
+        } else {
+            u32 m = 1UL << (39 - blk);
+            for (; blk < last; blk++, m >>= 1)
+                *o++ = (pf & m) ? r4 : bk4;
+        }
+    }
+    for (x = blk << 2; x < x1; x++)             /* tail */
+        out[x] = PF_ON(x >> 2) ? ((x < 80) ? cl : cr) : cbk;
+#undef PF_ON
+}
+
+/* full priority + collision evaluation for pixels [a, b) */
+static void eval_pixels(u8 *out, int a, int b)
+{
+    const u32 *pfm = pf_mask[tia.ctrlpf & 1];
+    const u8 *p0m = tia.p0_mask, *p1m = tia.p1_mask;
+    const u8 *m0m = tia.m0_mask, *m1m = tia.m1_mask, *blm = tia.bl_mask;
+    const u8 *prio = tia.prio;
+    const u32 pf = tia.pf;
+    const u8 gp0 = tia.gp0, gp1 = tia.gp1;
+    const u8 m0 = tia.m0_on, m1 = tia.m1_on, bl = tia.bl_on;
+    u16 coll = tia.coll;
+    int x;
+
+    for (x = a; x < b; x++) {
+        u8 o = 0;
+        if (pf & pfm[x]) o = O_PF;
+        if (gp0 & p0m[x]) o |= O_P0;
+        if (gp1 & p1m[x]) o |= O_P1;
+        if (m0 && m0m[x]) o |= O_M0;
+        if (m1 && m1m[x]) o |= O_M1;
+        if (bl && blm[x]) o |= O_BL;
+        coll |= coll_table[o];
+        out[x] = (x < 80) ? tia.col_l[prio[o]] : tia.col_r[prio[o]];
+    }
+    tia.coll = coll;
+}
+
+/* stamp one object: evaluate its runs, clipped to [x0, x1) */
+static void stamp_object(u8 *out, int obj, int pos, int x0, int x1)
+{
+    const u8 *r = tia.runs[obj];
+    int n = tia.nruns[obj];
+    while (n--) {
+        int s = pos + r[0], e;
+        if (s >= TIA_WIDTH) s -= TIA_WIDTH;
+        e = s + r[1];
+        r += 2;
+        if (e > TIA_WIDTH) {                    /* wraps around the right edge */
+            int a = s > x0 ? s : x0;
+            int b = (e - TIA_WIDTH) < x1 ? (e - TIA_WIDTH) : x1;
+            if (a < x1) eval_pixels(out, a, x1);
+            if (x0 < b) eval_pixels(out, x0, b);
+            continue;
+        }
+        if (s < x0) s = x0;
+        if (e > x1) e = x1;
+        if (s < e) eval_pixels(out, s, e);
+    }
+}
+
+/* draw pixels [x0, x1) of the current line */
+static void render(int x0, int x1)
+{
+    u8 *out = line_ptr();
+
+#ifdef A26_TIA_REFERENCE
+    if (tia_use_reference) { render_ref(x0, x1); return; }
+#endif
+    if (tia.vblank & 0x02) {
+        memset(out + x0, 0, (size_t)(x1 - x0));
+        return;
+    }
+    if (tia.cur_first_visible < 0) tia.cur_first_visible = tia.line;
+    tia.cur_last_visible = tia.line;
+
+    if (tia.hmove_blank && x0 < 8) {
+        int e = x1 < 8 ? x1 : 8;
+        memset(out + x0, 0, (size_t)(e - x0));
+        x0 = e;
+        if (x0 >= x1) return;
+    }
+
+    fill_playfield(out, x0, x1);
+    if (tia.gp0) stamp_object(out, 0, tia.pos_p0, x0, x1);
+    if (tia.gp1) stamp_object(out, 1, tia.pos_p1, x0, x1);
+    if (tia.m0_on) stamp_object(out, 2, tia.pos_m0, x0, x1);
+    if (tia.m1_on) stamp_object(out, 3, tia.pos_m1, x0, x1);
+    if (tia.bl_on) stamp_object(out, 4, tia.pos_bl, x0, x1);
 }
 
 static void end_frame(void)
@@ -484,11 +685,47 @@ u8 tia_read(u16 addr)
     return (u8)(v | (a26_databus & 0x3F));
 }
 
+/* Writes that cannot change any pixel or collision need no catch-up:
+ * returns 2 = value unchanged (write is a no-op), 1 = only affects later
+ * events (HMxx / HMCLR are applied by HMOVE, which catches up itself),
+ * 0 = normal write.
+ * Registers with a write delay (VBLANK, NUSIZx, REFPx, PFx) are never
+ * skipped: their catch-up renders a few pixels ahead, which also defers
+ * the effect of following writes - skipping them would change timing. */
+static int write_class(u8 r, u8 val)
+{
+    switch (r) {
+    case 0x06: return (val & 0xFE) == tia.colup0 ? 2 : 0;
+    case 0x07: return (val & 0xFE) == tia.colup1 ? 2 : 0;
+    case 0x08: return (val & 0xFE) == tia.colupf ? 2 : 0;
+    case 0x09: return (val & 0xFE) == tia.colubk ? 2 : 0;
+    case 0x0A: return val == tia.ctrlpf ? 2 : 0;
+    case 0x1D: return ((val & 0x02) != 0) == tia.enam0 ? 2 : 0;
+    case 0x1E: return ((val & 0x02) != 0) == tia.enam1 ? 2 : 0;
+    case 0x1F: return ((val & 0x02) != 0) == tia.enabl_new ? 2 : 0;
+    case 0x20: case 0x21: case 0x22: case 0x23: case 0x24: case 0x2B:
+        return 1;
+    case 0x25: return (val & 0x01) == tia.vdelp0 ? 2 : 0;
+    case 0x26: return (val & 0x01) == tia.vdelp1 ? 2 : 0;
+    case 0x27: return (val & 0x01) == tia.vdelbl ? 2 : 0;
+    case 0x28: return ((val & 0x02) != 0) == tia.resmp0 ? 2 : 0;
+    case 0x29: return ((val & 0x02) != 0) == tia.resmp1 ? 2 : 0;
+    }
+    return 0;
+}
+
 void tia_write(u16 addr, u8 val)
 {
     u32 cc = a26_cycles * 3u;
     u8 r = (u8)(addr & 0x3F);
     u32 delay = 0;
+    int wc = write_class(r, val);
+
+#ifdef A26_TIA_REFERENCE
+    if (tia_use_reference) wc = 0;
+#endif
+    if (wc == 2) return;
+    if (wc == 1) goto apply;
 
     switch (r) {
     case 0x01: delay = 1; break;                   /* VBLANK */
@@ -503,6 +740,7 @@ void tia_write(u16 addr, u8 val)
     }
     update_to(cc + delay);
 
+apply:
     switch (r) {
     case 0x00: /* VSYNC */
         if ((val & 0x02) && !(tia.vsync & 0x02))
