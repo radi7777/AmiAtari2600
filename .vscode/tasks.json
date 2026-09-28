@@ -1,0 +1,35 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Host: build",
+            "type": "shell",
+            "command": "make",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Host: run tests",
+            "type": "shell",
+            "command": "make test",
+            "group": { "kind": "test", "isDefault": true },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Amiga: build (vbcc)",
+            "type": "shell",
+            "command": "make -f Makefile.amiga NDK_INC=${env:NDK_INC}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Host: run ROM (screenshot + wav)",
+            "type": "shell",
+            "command": "./build/a26host '${input:rom}' -frames 300 -ppm build/shot.ppm -wav build/sound.wav",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        { "id": "rom", "type": "promptString", "description": "ROM file", "default": "roms/" }
+    ]
+}
