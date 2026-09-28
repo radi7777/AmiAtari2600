@@ -30,9 +30,9 @@
 #include "../core/tia.h"
 
 #define TOP_PAL         0x2C
-#define TOP_NTSC        0x1C
+#define TOP_NTSC        0x15            /* first line after the NTSC vertical blank */
 #define HEIGHT_PAL      256
-#define HEIGHT_NTSC     224
+#define HEIGHT_NTSC     240
 #define COP_HEADER      (5 * 2 * 2 + 2 * 2)             /* bitplane pointers + BPLCON0 + COLOR00 */
 #define COP_LINE_WORDS  (2 + VC_MAX_MOVES * 2)
 #define COP_WORDS       (COP_HEADER + 2 + VID_MAX_HEIGHT * COP_LINE_WORDS + 2)

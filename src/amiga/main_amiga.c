@@ -123,6 +123,11 @@ static void pc_report(void)
 }
 
 static int vstart = -1, vstart_pending = -1, vstart_count;
+/* recent looks at the picture's extent, see choose_vstart() */
+#define CONTENT_LOOKS 16
+static s16 content_first[CONTENT_LOOKS], content_last[CONTENT_LOOKS];
+static int content_n, content_i, content_frame;
+
 
 static int streq_nocase(const char *a, const char *b)
 {
@@ -217,21 +222,60 @@ static void apply_mode(void)
     video_set_mode(display_pal, colours);
     if (!opt.nosound) audio_start(display_pal);
     vstart = -1;
+    content_n = content_i = 0;
 }
 
-/* choose the first TIA line shown, centring the game's visible area.
- * Changes are only taken over when stable, so games that vary their
- * VBLANK length slightly do not make the picture jump. */
+/* choose the first TIA line shown, centring the game's picture.
+ * The picture is where the lines are not all black: the VBLANK range says
+ * little for some games (Battlezone never blanks, Enduro unblanks from
+ * line 8, many leave 20-30 black lines at the bottom). Every 4th frame
+ * the first and last non-black line are looked up (the search stops at
+ * the first non-black pixel, so it is cheap); the union of the last 16
+ * looks (about a second) is centred. Changes are only taken over when
+ * stable for 30 frames, so the picture does not jump. */
+
+static int line_blank(const u8 *fb, int y)
+{
+    const u32 *l = (const u32 *)(const void *)(fb + y * TIA_WIDTH);
+    int i;
+    for (i = 0; i < TIA_WIDTH / 4; i++)
+        if (l[i]) return 0;
+    return 1;
+}
+
+static void look_at_content(void)
+{
+    const u8 *fb = a26_framebuffer();
+    int lo = tia.first_visible, hi = tia.last_visible;
+    if (hi >= tia.frame_lines) hi = tia.frame_lines - 1;
+    if (hi >= TIA_FB_LINES) hi = TIA_FB_LINES - 1;
+    if (lo < 0) lo = 0;
+    while (lo <= hi && line_blank(fb, lo)) lo++;
+    if (lo > hi) return;                        /* all black: no news */
+    while (line_blank(fb, hi)) hi--;
+    content_first[content_i] = (s16)lo;
+    content_last[content_i] = (s16)hi;
+    content_i = (content_i + 1) % CONTENT_LOOKS;
+    if (content_n < CONTENT_LOOKS) content_n++;
+}
+
 static int choose_vstart(void)
 {
     int h = video_height();
-    int first = tia.first_visible, last = tia.last_visible, want;
+    int want, i;
 
-    if (first < 0 || last < first) {
+    if ((++content_frame & 3) == 0) look_at_content();
+    if (!content_n) {
         want = (a26.region == REGION_PAL) ? 48 : 36;
     } else {
-        int vis = last - first + 1;
-        want = (vis >= h) ? first : first - (h - vis) / 2;
+        int first = content_first[0], last = content_last[0];
+        for (i = 1; i < content_n; i++) {
+            if (content_first[i] < first) first = content_first[i];
+            if (content_last[i] > last) last = content_last[i];
+        }
+        /* centred; a picture taller than the display loses the same at
+         * the top and at the bottom */
+        want = first - (h - (last - first + 1)) / 2;
     }
     if (want > TIA_FB_LINES - h) want = TIA_FB_LINES - h;
     if (want < 0) want = 0;
