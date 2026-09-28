@@ -26,10 +26,13 @@ $(BUILD)/vidconv_test: tests/vidconv_test.c src/amiga/vidconv.c src/amiga/vidcon
 $(BUILD)/tia_equiv: tests/tia_equiv.c $(CORE_SRC) src/core/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -DA26_TIA_REFERENCE -o $@ tests/tia_equiv.c $(CORE_SRC)
 
+$(BUILD)/tia_check: tests/tia_equiv.c $(CORE_SRC) src/core/*.h | $(BUILD)
+	$(CC) $(CFLAGS) -DA26_TIA_REFERENCE -DA26_CHECK -o $@ tests/tia_equiv.c $(CORE_SRC)
+
 $(BUILD)/cpu_functional: tests/cpu_functional.c src/core/cpu.c src/core/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/cpu_functional.c src/core/cpu.c
 
-test: $(BUILD)/a26host $(BUILD)/cpu_functional $(BUILD)/vidconv_test $(BUILD)/tia_equiv
+test: $(BUILD)/a26host $(BUILD)/cpu_functional $(BUILD)/vidconv_test $(BUILD)/tia_equiv $(BUILD)/tia_check
 	sh tests/run_tests.sh
 
 # Cross-check the core on a big-endian 68k CPU (needs m68k-linux-gnu-gcc,
@@ -82,3 +85,20 @@ clean:
 # host harness that prints every TIA write of one frame (-trace N)
 $(BUILD)/a26trace: $(CORE_SRC) $(HOST_SRC) src/core/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -DA26_TRACE -o $@ $(CORE_SRC) $(HOST_SRC)
+
+# 68k instruction counter (tools/m68kprof) on the Musashi emulator.
+# Needs the vbcc build of the benchmark: make -f Makefile.amiga bench
+MUSASHI ?= $(BUILD)/musashi
+MUSASHI_DEFS := -DM68K_INSTRUCTION_HOOK=M68K_OPT_SPECIFY_HANDLER '-DM68K_INSTRUCTION_CALLBACK(pc)=prof_hook(pc)' \
+                -DM68K_ILLG_HAS_CALLBACK=M68K_OPT_SPECIFY_HANDLER '-DM68K_ILLG_CALLBACK(op)=prof_illegal(op)'
+
+$(MUSASHI)/m68kcpu.c:
+	git clone -q --depth 1 https://github.com/kstenerud/Musashi.git $(MUSASHI)
+
+$(MUSASHI)/m68kops.c: $(MUSASHI)/m68kcpu.c
+	cd $(MUSASHI) && $(CC) -O1 -o m68kmake m68kmake.c && ./m68kmake
+
+$(BUILD)/m68kprof: tools/m68kprof/m68kprof.c $(MUSASHI)/m68kops.c | $(BUILD)
+	$(CC) -O2 -w $(MUSASHI_DEFS) -I$(MUSASHI) -o $@ tools/m68kprof/m68kprof.c \
+	  $(MUSASHI)/m68kcpu.c $(MUSASHI)/m68kops.c $(MUSASHI)/m68kdasm.c $(MUSASHI)/softfloat/softfloat.c \
+	  -include tools/m68kprof/hooks.h

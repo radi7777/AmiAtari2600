@@ -46,7 +46,18 @@ void vc_set_palette(const u32 *palette24);
  *   planes: receives planes 1-4, VC_ROW_LONGS longwords each (plane 5 is
  *           the constant bank select and is set up by the caller)
  * Returns the number of moves. */
+int  vc_convert_line_c(const u8 *tia_line, int bank, u32 *moves, u32 *planes);
+/* 1 if the two TIA lines (160 bytes, longword aligned) are equal */
+int  vc_same_line_c(const u32 *a, const u32 *b);
+
+#ifdef A26_ASM_VIDEO
+/* 68k assembler versions (vidconv_asm.s), same results */
 int  vc_convert_line(const u8 *tia_line, int bank, u32 *moves, u32 *planes);
+int  vc_same_line(const u32 *a, const u32 *b);
+#else
+#define vc_convert_line vc_convert_line_c
+#define vc_same_line vc_same_line_c
+#endif
 
 /* like vc_convert_line, but only computes the register index (0..15)
  * of every pixel; for tests */

@@ -53,6 +53,7 @@ static struct {
     int killos;
     int nohandler;      /* diagnostics: no input.device handler */
     int notimer;        /* diagnostics: no timer.device sleeps */
+    int profpc;         /* PC sampling profiler */
     int profile;
     long bench;         /* frames, 0 = off */
     long frames;        /* quit after n frames, 0 = never */
@@ -102,6 +103,18 @@ static void prof_report(void)
     }
 }
 
+/* PC samples: "offset count" per 16 byte bucket of the code hunk, for
+ * tools/pcprof.py and the vlink map */
+static void pc_report(void)
+{
+    ULONG i, n = prof_size / 16 + 1, total = prof_other;
+    for (i = 0; i < n; i++) total += prof_hist[i];
+    printf("PCPROF total %lu other %lu\n", total, prof_other);
+    for (i = 0; i < n; i++)
+        if (prof_hist[i]) printf("PC %lx %lu\n", i * 16, prof_hist[i]);
+    FreeMem(prof_hist, n * 4);
+}
+
 static int vstart = -1, vstart_pending = -1, vstart_count;
 
 static int streq_nocase(const char *a, const char *b)
@@ -141,6 +154,7 @@ static int parse_args(int argc, char **argv)
         else if (streq_nocase(a, "KILLOS")) opt.killos = 1;
         else if (streq_nocase(a, "NOHANDLER")) opt.nohandler = 1;
         else if (streq_nocase(a, "NOTIMER")) opt.notimer = 1;
+        else if (streq_nocase(a, "PROFPC")) { opt.profpc = 1; opt.killos = 1; }
         else if (streq_nocase(a, "PROFILE")) opt.profile = 1;
         else if (strncmp(a, "BENCH=", 6) == 0 || strncmp(a, "bench=", 6) == 0) {
             opt.bench = atol(a + 6);
@@ -415,10 +429,13 @@ int main(int argc, char **argv)
     a26_reset();
     hw_no_timer = opt.notimer;
     hw_takeover(opt.killos);
+    if (opt.profpc && hw_profile_start()) opt.profpc = 0;
     run();
+    if (opt.profpc) hw_profile_stop();
     if (!opt.nosound) audio_stop();
     hw_restore();
     if (opt.profile) prof_report();
+    if (opt.profpc) pc_report();
 
     audio_free();
     video_free();

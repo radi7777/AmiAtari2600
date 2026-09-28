@@ -18,6 +18,7 @@
 #include <exec/execbase.h>
 #include <exec/interrupts.h>
 #include <devices/timer.h>
+#include <dos/dosextens.h>
 #include <hardware/intbits.h>
 #include <graphics/gfxbase.h>
 #include <graphics/view.h>
@@ -51,6 +52,54 @@ static struct TimeRequest *tmr_req;
 static int tmr_open;
 int hw_no_timer;
 extern int hw_is_pal;
+
+/* ---- PC sampling profiler (see irq.s) ---- */
+ULONG prof_base, prof_size, prof_other;
+ULONG *prof_hist;
+extern void prof_handler(void);
+extern ULONG prof_get_vbr(void);
+static APTR *prof_vbr;
+static APTR prof_old_vec;
+
+int hw_profile_start(void)
+{
+    struct Process *pr = (struct Process *)FindTask(NULL);
+    struct CommandLineInterface *cli = (struct CommandLineInterface *)BADDR(pr->pr_CLI);
+    ULONG *seg;
+    if (!killed_os || !cli || !cli->cli_Module) return -1;
+    seg = (ULONG *)BADDR(cli->cli_Module);      /* first hunk: CODE */
+    prof_base = (ULONG)(seg + 1);
+    prof_size = seg[-1] - 8;                     /* hunk size incl. header */
+    prof_hist = (ULONG *)AllocMem((prof_size / 16 + 1) * 4, MEMF_ANY | MEMF_CLEAR);
+    if (!prof_hist) return -1;
+    prof_other = 0;
+    prof_vbr = (APTR *)Supervisor((ULONG (*)())prof_get_vbr);
+    prof_old_vec = prof_vbr[30];                 /* level 6 autovector */
+    prof_vbr[30] = (APTR)prof_handler;
+    CacheClearU();
+    /* CIA-B timer A, continuous, ~2 kHz (E clock ~709 kHz) */
+    ciab->ciacra = 0;
+    ciab->ciaicr = 0x7F;
+    ciab->ciatalo = (UBYTE)(355 & 0xFF);
+    ciab->ciatahi = (UBYTE)(355 >> 8);
+    ciab->ciaicr = 0x81;
+    ciab->ciacra = 0x11;                         /* start, force load, continuous */
+    hw->intreq = INTF_EXTER;
+    hw->intena = INTF_SETCLR | INTF_INTEN | INTF_EXTER;
+    return 0;
+}
+
+void hw_profile_stop(void)
+{
+    if (!prof_vbr) return;
+    hw->intena = INTF_EXTER | INTF_INTEN;
+    ciab->ciacra = 0;
+    ciab->ciaicr = 0x01;
+    hw->intreq = INTF_EXTER;
+    prof_vbr[30] = prof_old_vec;
+    CacheClearU();
+    prof_vbr = NULL;
+}
 static ULONG vbl_seen;
 static struct Interrupt vbl_int;
 

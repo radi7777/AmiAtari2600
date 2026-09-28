@@ -70,7 +70,14 @@ void a26_reset(void)
     actx.map_dirty = 1;
     actx.bank_on_tia = (u8)cart_tia_hook;
     actx.tia_direct = (u8)!cart_tia_hook;
+#ifdef A26_ASM_TIA
+    {
+        extern void tia_write_asm(u32 addr, u32 val);  /* src/amiga/tia_asm.s */
+        actx.tiawr = tia_write_asm;
+    }
+#else
     actx.tiawr = asm_tia_write;
+#endif
     cpu_asm_build_map = build_asm_map;
     cpu_asm_map_changed = cart_asm_map_changed;
 #endif

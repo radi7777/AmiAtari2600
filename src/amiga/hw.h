@@ -44,7 +44,12 @@ int  hw_set_pal(int pal);
 
 void hw_wait_vbl(void);         /* wait for the next vertical blank */
 void hw_wait_line(int line);
-extern int hw_no_timer;         /* diagnostics: never sleep in timer.device */    /* wait until the beam reaches line (this frame) */
+extern int hw_no_timer;
+
+/* PC sampling profiler, only with kill_os (PROFPC) */
+int  hw_profile_start(void);
+void hw_profile_stop(void);
+extern ULONG prof_base, prof_size, prof_other, *prof_hist;         /* diagnostics: never sleep in timer.device */    /* wait until the beam reaches line (this frame) */
 int  hw_vbl_pending(void);      /* vertical blank happened since last clear */
 void hw_clear_vbl(void);
 void hw_wait_lines(int n);      /* busy-wait n raster lines (~64 us each) */

@@ -165,15 +165,6 @@ int video_height(void)
     return height;
 }
 
-static int same_line(const u32 *a, const u32 *b)
-{
-    int i;
-    for (i = 0; i < VC_WIDTH / 4; i += 4)
-        if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2] || a[i + 3] != b[i + 3])
-            return 0;
-    return 1;
-}
-
 void video_render(const u8 *tia_fb, int fb_lines, int first)
 {
     Buffer *b = &buf[back];
@@ -190,7 +181,7 @@ void video_render(const u8 *tia_fb, int fb_lines, int first)
         u8 *row;
         int n, i, p;
 
-        if (b->valid[y] && same_line(line, b->shadow[y]))
+        if (b->valid[y] && vc_same_line(line, b->shadow[y]))
             continue;
 
         n = vc_convert_line((const u8 *)line, y & 1, moves, pl);

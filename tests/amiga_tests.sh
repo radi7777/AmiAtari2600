@@ -22,6 +22,9 @@ ROMS="build/bars_ntsc.bin build/bars_pal.bin build/bank_f8.bin build/busy_ntsc.b
     echo "Stack 200000"
     echo "FailAt 100"
     echo "cputest_asm kd.bin >out/cpu_asm.txt"
+    echo "tiatest_asm >out/tiatest.txt"
+    echo "vidtest_asm bars_ntsc.bin >out/vidtest.txt"
+    for r in $*; do echo "vidtest_asm $(basename $r) >>out/vidtest.txt"; done
     for r in $ROMS; do
         n=$(basename "$r" .bin)
         cp "$r" $D/$n.bin
@@ -60,6 +63,10 @@ kill $PID 2>/dev/null
 FAILS=0
 cat $D/out/cpu_asm.txt
 grep -q PASSED $D/out/cpu_asm.txt || FAILS=$((FAILS + 1))
+sed 's/^/  tia asm: /' $D/out/tiatest.txt
+grep -q "^ok" $D/out/tiatest.txt || FAILS=$((FAILS + 1))
+sed 's/^/  vidconv asm: /' $D/out/vidtest.txt
+grep -q FAIL $D/out/vidtest.txt && FAILS=$((FAILS + 1))
 for r in $ROMS; do
     n=$(basename "$r" .bin)
     if cmp -s $D/out/c_$n.ppm $D/out/a_$n.ppm && cmp -s $D/out/c_$n.wav $D/out/a_$n.wav \

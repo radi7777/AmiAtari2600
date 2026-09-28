@@ -42,10 +42,16 @@ Tia tia;
 static u8  player_mask[2][8][320];  /* [no main copy][nusiz] bit mask (0x80 = first pixel) */
 static u8  missile_mask[8][4][320]; /* 0/1 */
 static u8  ball_mask[4][320];
-static u32 pf_mask[2][TIA_WIDTH];   /* [reflect][x] -> bit in tia.pf */
-static u8  reverse_bits[256];
-static u8  prio_table[2][64];       /* [pfp][objects] -> colour index */
-static u16 coll_table[64];
+/* tables shared with the 68k renderer (src/amiga/tia_asm.s) */
+u32 tia_pf_mask[2][TIA_WIDTH];      /* [reflect][x] -> bit in tia.pf */
+u8  tia_prio_table[2][64];          /* [pfp][objects] -> colour index */
+u16 tia_coll_table[64];
+const u8 tia_zero_mask[320];        /* object mask of a disabled object */
+#define pf_mask tia_pf_mask
+#define prio_table tia_prio_table
+#define coll_table tia_coll_table
+u8  tia_reverse_bits[256];
+#define reverse_bits tia_reverse_bits
 static int tables_ready;
 
 /* pixel runs of each mask table: (offset, length) pairs, offset relative to
@@ -398,6 +404,19 @@ static void build_lock_mask(int i, int mode, int size, int pos)
     tia.lock_nruns[i] = (u8)n;
 }
 
+/* graphics only (GRPx, REFPx, VDELPx): the masks stay as they are */
+static void upd_g0(void)
+{
+    u8 g = tia.vdelp0 ? tia.grp0_old : tia.grp0_new;
+    tia.gp0 = tia.refp0 ? reverse_bits[g] : g;
+}
+
+static void upd_g1(void)
+{
+    u8 g = tia.vdelp1 ? tia.grp1_old : tia.grp1_new;
+    tia.gp1 = tia.refp1 ? reverse_bits[g] : g;
+}
+
 static void upd_m0(void)
 {
     tia.m0_on = tia.enam0 && !tia.resmp0;
@@ -537,7 +556,8 @@ static void audio_line(void)
 
 /* ---- rendering -------------------------------------------------------- */
 
-static u32 scratch_line32[TIA_WIDTH / 4];   /* lines beyond the framebuffer */
+u32 tia_scratch_line32[TIA_WIDTH / 4];      /* lines beyond the framebuffer */
+#define scratch_line32 tia_scratch_line32
 #define scratch_line ((u8 *)scratch_line32)
 
 static u8 *line_ptr(void)
@@ -725,6 +745,21 @@ static void stamp_object(u8 *out, int obj, int pos, int x0, int x1)
     }
 }
 
+#ifdef A26_ASM_TIA
+/* src/amiga/tia_asm.s: the fixed Tia layout it relies on */
+void tia_render(u8 *out, int x0, int x1);
+#include <stddef.h>
+#define TIA_OFS(f, o) typedef char tia_ofs_##f[(sizeof(void *) != 4 || offsetof(Tia, f) == (o)) ? 1 : -1]
+TIA_OFS(line, 8); TIA_OFS(pf, 16); TIA_OFS(p0_mask, 20); TIA_OFS(bl_mask, 36); TIA_OFS(runs, 40);
+TIA_OFS(prio, 60); TIA_OFS(cur_first_visible, 64); TIA_OFS(cur_last_visible, 68); TIA_OFS(coll, 72);
+TIA_OFS(nruns, 74); TIA_OFS(gp0, 79); TIA_OFS(gp1, 80); TIA_OFS(m0_on, 81); TIA_OFS(bl_on, 83);
+TIA_OFS(col_l, 84); TIA_OFS(col_r, 89); TIA_OFS(vblank, 94); TIA_OFS(ctrlpf, 95); TIA_OFS(colubk, 96);
+TIA_OFS(hmove_blank, 97); TIA_OFS(pos_p0, 98); TIA_OFS(pos_bl, 102);
+TIA_OFS(colup0, 127); TIA_OFS(colupf, 129); TIA_OFS(refp0, 130); TIA_OFS(pf0, 132); TIA_OFS(pf2, 134);
+TIA_OFS(grp0_new, 135); TIA_OFS(grp1_old, 138); TIA_OFS(enam0, 139); TIA_OFS(enabl_old, 142);
+TIA_OFS(vdelp0, 148); TIA_OFS(vdelbl, 150); TIA_OFS(resmp0, 151); TIA_OFS(resmp1, 152);
+#endif
+
 /* draw pixels [x0, x1) of the current line */
 static void render(int x0, int x1)
 {
@@ -732,6 +767,10 @@ static void render(int x0, int x1)
 
 #ifdef A26_TIA_REFERENCE
     if (tia_use_reference) { render_ref(x0, x1); return; }
+#endif
+#ifdef A26_ASM_TIA
+    tia_render(out, x0, x1);
+    return;
 #endif
     if (tia.vblank & 0x02) {
         memset(out + x0, 0, (size_t)(x1 - x0));
@@ -772,15 +811,14 @@ static void end_frame(void)
 
 static void apply_hmove(void)
 {
-#define MOVE(pos, d) pos = (u8)(((int)(pos) + (d) + TIA_WIDTH) % TIA_WIDTH)
-    MOVE(tia.pos_p0, tia.hm_disp[0]);
-    MOVE(tia.pos_p1, tia.hm_disp[1]);
-    MOVE(tia.pos_m0, tia.hm_disp[2]);
-    MOVE(tia.pos_m1, tia.hm_disp[3]);
-    MOVE(tia.pos_bl, tia.hm_disp[4]);
+#define MOVE(pos, d, upd) if (d) { pos = (u8)(((int)(pos) + (d) + TIA_WIDTH) % TIA_WIDTH); upd(); }
+    MOVE(tia.pos_p0, tia.hm_disp[0], upd_p0);
+    MOVE(tia.pos_p1, tia.hm_disp[1], upd_p1);
+    MOVE(tia.pos_m0, tia.hm_disp[2], upd_m0);
+    MOVE(tia.pos_m1, tia.hm_disp[3], upd_m1);
+    MOVE(tia.pos_bl, tia.hm_disp[4], upd_bl);
 #undef MOVE
     tia.hm_pending = 0;
-    upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
 }
 
 /* locked objects move 17 pixels left per line (measured with gopher2600) */
@@ -845,6 +883,11 @@ static void end_line(void)
     tia.line++;
     if (tia.line >= TIA_MAX_LINES)
         end_frame();
+}
+
+void tia_end_line(void)         /* for tia_asm.s */
+{
+    end_line();
 }
 
 static void update_to(u32 target)
@@ -966,6 +1009,36 @@ static int write_class(u8 r, u8 val)
 #define HM_LOCKED() (tia.hm_lock[0] | tia.hm_lock[1] | tia.hm_lock[2] | tia.hm_lock[3] | tia.hm_lock[4])
 #define HM_WATCH(cc) ((u32)((cc) - tia.hm_line_cc) < 140u || HM_LOCKED())
 
+#ifdef A26_CHECK
+/* tests/tia_equiv.c built with -DA26_CHECK: after every write the derived
+ * state (masks, runs, graphics) must equal a full recomputation */
+#include <stdio.h>
+static void tia_write_impl(u16 addr, u8 val);
+static void check_state(u8 r)
+{
+    const u8 *m[5], *ru[5];
+    u8 g0 = tia.gp0, g1 = tia.gp1, on[3], nr[5];
+    int i;
+    m[0] = tia.p0_mask; m[1] = tia.p1_mask; m[2] = tia.m0_mask; m[3] = tia.m1_mask; m[4] = tia.bl_mask;
+    on[0] = tia.m0_on; on[1] = tia.m1_on; on[2] = tia.bl_on;
+    for (i = 0; i < 5; i++) { ru[i] = tia.runs[i]; nr[i] = tia.nruns[i]; }
+    upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
+    if (m[0] != tia.p0_mask || m[1] != tia.p1_mask || m[2] != tia.m0_mask || m[3] != tia.m1_mask ||
+        m[4] != tia.bl_mask || g0 != tia.gp0 || g1 != tia.gp1 || on[0] != tia.m0_on || on[1] != tia.m1_on ||
+        on[2] != tia.bl_on)
+        printf("stale state after write to %02X\n", r);
+    for (i = 0; i < 5; i++)
+        if (ru[i] != tia.runs[i] || nr[i] != tia.nruns[i]) printf("stale runs %d after write to %02X\n", i, r);
+}
+
+void tia_write(u16 addr, u8 val)
+{
+    tia_write_impl(addr, val);
+    check_state((u8)(addr & 0x3F));
+}
+#define tia_write tia_write_impl
+static
+#endif
 void tia_write(u16 addr, u8 val)
 {
     u32 cc = a26_cycles * 3u;
@@ -1032,8 +1105,8 @@ apply:
     case 0x08: tia.colupf = val & 0xFE; upd_colors(); break;
     case 0x09: tia.colubk = val & 0xFE; upd_colors(); break;
     case 0x0A: tia.ctrlpf = val; upd_colors(); upd_bl(); break;
-    case 0x0B: tia.refp0 = (val & 0x08) != 0; upd_p0(); break;
-    case 0x0C: tia.refp1 = (val & 0x08) != 0; upd_p1(); break;
+    case 0x0B: tia.refp0 = (val & 0x08) != 0; upd_g0(); break;
+    case 0x0C: tia.refp1 = (val & 0x08) != 0; upd_g1(); break;
     case 0x0D: tia.pf0 = val; upd_pf(); break;
     case 0x0E: tia.pf1 = val; upd_pf(); break;
     case 0x0F: tia.pf2 = val; upd_pf(); break;
@@ -1065,24 +1138,28 @@ apply:
     case 0x1B: /* GRP0 */
         tia.grp0_new = val;
         tia.grp1_old = tia.grp1_new;
-        upd_p0(); upd_p1();
+        upd_g0(); upd_g1();
         break;
     case 0x1C: /* GRP1 */
         tia.grp1_new = val;
         tia.grp0_old = tia.grp0_new;
         tia.enabl_old = tia.enabl_new;
-        upd_p0(); upd_p1(); upd_bl();
+        upd_g0(); upd_g1();
+        tia.bl_on = tia.vdelbl ? tia.enabl_old : tia.enabl_new;
         break;
     case 0x1D: tia.enam0 = (val & 0x02) != 0; upd_m0(); break;
     case 0x1E: tia.enam1 = (val & 0x02) != 0; upd_m1(); break;
-    case 0x1F: tia.enabl_new = (val & 0x02) != 0; upd_bl(); break;
+    case 0x1F:
+        tia.enabl_new = (val & 0x02) != 0;
+        tia.bl_on = tia.vdelbl ? tia.enabl_old : tia.enabl_new;
+        break;
     case 0x20: tia.hmp0 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(0, tia.hmp0, cc); break;
     case 0x21: tia.hmp1 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(1, tia.hmp1, cc); break;
     case 0x22: tia.hmm0 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(2, tia.hmm0, cc); break;
     case 0x23: tia.hmm1 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(3, tia.hmm1, cc); break;
     case 0x24: tia.hmbl = val & 0xF0; if (HM_WATCH(cc)) hm_changed(4, tia.hmbl, cc); break;
-    case 0x25: tia.vdelp0 = val & 0x01; upd_p0(); break;
-    case 0x26: tia.vdelp1 = val & 0x01; upd_p1(); break;
+    case 0x25: tia.vdelp0 = val & 0x01; upd_g0(); break;
+    case 0x26: tia.vdelp1 = val & 0x01; upd_g1(); break;
     case 0x27: tia.vdelbl = val & 0x01; upd_bl(); break;
     case 0x28: case 0x29: { /* RESMP0/1: lock missile to player centre */
         int m = r - 0x28;
@@ -1112,7 +1189,11 @@ apply:
         tia.hm_v[2] = (u8)((tia.hmm0 >> 4) ^ 8);
         tia.hm_v[3] = (u8)((tia.hmm1 >> 4) ^ 8);
         tia.hm_v[4] = (u8)((tia.hmbl >> 4) ^ 8);
-        tia.hm_lock[0] = tia.hm_lock[1] = tia.hm_lock[2] = tia.hm_lock[3] = tia.hm_lock[4] = 0;
+        if (tia.hm_lock[0] | tia.hm_lock[1] | tia.hm_lock[2] | tia.hm_lock[3] | tia.hm_lock[4]) {
+            /* a new HMOVE ends the lock: back to the normal masks */
+            tia.hm_lock[0] = tia.hm_lock[1] = tia.hm_lock[2] = tia.hm_lock[3] = tia.hm_lock[4] = 0;
+            upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
+        }
         tia.hm_disp[0] = hmove_disp[tia.hmp0 >> 4][w];
         tia.hm_disp[1] = hmove_disp[tia.hmp1 >> 4][w];
         tia.hm_disp[2] = hmove_disp[tia.hmm0 >> 4][w];

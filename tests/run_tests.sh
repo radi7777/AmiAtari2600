@@ -61,6 +61,10 @@ python3 tests/check.py row $B/cpu_paths.ppm 100 0:2d32b8 41:2d32b8 42:5cba5c 43:
 
 echo "== TIA renderer (optimised vs. reference per-pixel renderer)"
 if $TIATEST; then ok "tia_equiv"; else fail "tia_equiv"; fi
+if [ -x $B/tia_check ] && [ "$TIATEST" = "$B/tia_equiv" ]; then
+    out=$($B/tia_check | grep -c stale)
+    [ "$out" = "0" ] && ok "TIA derived state always consistent" || fail "tia_check: $out stale states"
+fi
 
 echo "== Amiga video conversion (copper palette + c2p, simulated)"
 if $VIDTEST $B/bars_ntsc.bin; then ok "vidconv"; else fail "vidconv"; fi

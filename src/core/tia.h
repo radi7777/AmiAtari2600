@@ -45,25 +45,43 @@ typedef struct {
 } TiaAudioChannel;
 
 typedef struct {
-    /* timing */
-    u32 line_start_cc;      /* absolute colour clock of current line start */
-    u32 last_cc;            /* rendered up to this colour clock */
-    int line;               /* scanline within current frame */
+    /* ---- hot rendering state; longword aligned, fixed layout: the 68k
+     * renderer (src/amiga/tia_asm.s) uses these offsets, checked in tia.c */
+    u32 line_start_cc;      /*  0 absolute colour clock of current line start */
+    u32 last_cc;            /*  4 rendered up to this colour clock */
+    int line;               /*  8 scanline within current frame */
+    u8  *fb;                /* 12 TIA_FB_LINES * TIA_WIDTH bytes */
+    u32 pf;                 /* 16 20 playfield bits in display order */
+    const u8 *p0_mask, *p1_mask, *m0_mask, *m1_mask, *bl_mask;   /* 20..36 */
+    /* pixel runs (offset, length pairs relative to the object position)
+     * where the object can draw: P0, P1, M0, M1, BL */
+    const u8 *runs[5];      /* 40..56 */
+    const u8 *prio;         /* 60 64-entry object->colour index table */
+    int cur_first_visible;  /* 64 */
+    int cur_last_visible;   /* 68 */
+    u16 coll;               /* 72 collision latches */
+    u8  nruns[5];           /* 74..78 */
+    u8  gp0, gp1;           /* 79, 80 current player graphics incl. VDEL + reflect */
+    u8  m0_on, m1_on, bl_on;    /* 81..83 */
+    u8  col_l[5], col_r[5]; /* 84..93 colour per index for left/right half */
+    u8  vblank;             /* 94 */
+    u8  ctrlpf;             /* 95 */
+    u8  colubk;             /* 96 */
+    u8  hmove_blank;        /* 97 */
+    u8  pos_p0, pos_p1, pos_m0, pos_m1, pos_bl;     /* 98..102 */
+    u8  pad_;
 
     /* frame result */
-    u8  *fb;                /* TIA_FB_LINES * TIA_WIDTH bytes */
     int frame_done;         /* set when a frame completed (VSYNC) */
     int frame_lines;        /* number of lines of the last completed frame */
     int first_visible;      /* first line with VBLANK off (last frame) */
     int last_visible;       /* last line with VBLANK off (last frame) */
-    int cur_first_visible, cur_last_visible;
     u32 frame_count;
 
     /* registers */
-    u8  vsync, vblank;
+    u8  vsync;
     u8  nusiz0, nusiz1;
-    u8  colup0, colup1, colupf, colubk;
-    u8  ctrlpf;
+    u8  colup0, colup1, colupf;
     u8  refp0, refp1;
     u8  pf0, pf1, pf2;
     u8  grp0_new, grp0_old, grp1_new, grp1_old;
@@ -71,20 +89,8 @@ typedef struct {
     u8  hmp0, hmp1, hmm0, hmm1, hmbl;
     u8  vdelp0, vdelp1, vdelbl;
     u8  resmp0, resmp1;
-    u8  pos_p0, pos_p1, pos_m0, pos_m1, pos_bl;
 
-    /* derived state */
-    u32 pf;                 /* 20 playfield bits in display order */
-    u8  gp0, gp1;           /* current player graphics incl. VDEL + reflect */
-    u8  m0_on, m1_on, bl_on;
-    const u8 *p0_mask, *p1_mask, *m0_mask, *m1_mask, *bl_mask;
-    /* pixel runs (offset, length pairs relative to the object position)
-     * where the object can draw: P0, P1, M0, M1, BL */
-    const u8 *runs[5];
-    u8  nruns[5];
-    const u8 *prio;         /* 64-entry object->colour index table */
-    u8  col_l[5], col_r[5]; /* colour per index for left/right half */
-    u8  hmove_blank;
+    /* other derived state */
     u8  p0_nomain, p1_nomain;   /* reset this line: main copy not drawn yet */
     s8  hm_disp[5];             /* HMOVE displacement P0, P1, M0, M1, BL */
     u8  hm_pending;             /* late HMOVE: apply at the end of the line */
@@ -93,8 +99,6 @@ typedef struct {
     u8  hm_v[5];                /* extra clocks each object is due */
     u8  hm_lock[5];             /* locked in HMOVE (see hm_changed) */
     u8  lock_nruns[3];
-
-    u16 coll;               /* collision latches */
 
     /* input */
     u8  fire[2];            /* 1 = pressed (INPT4 / INPT5) */

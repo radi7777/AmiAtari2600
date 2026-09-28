@@ -19,12 +19,17 @@ OPT      ?= -O2 -speed
 NDK_INC  ?=
 OUT      := build/amiga
 
-CFLAGS   := $(CONFIG) -c99 $(CPU) $(FPU) $(OPT) -DA26_BIG_ENDIAN
+CFLAGS   := $(CONFIG) -c99 $(CPU) $(FPU) $(OPT) -DA26_BIG_ENDIAN -DA26_ASM_VIDEO
 ifneq ($(NDK_INC),)
 CFLAGS   += -I$(NDK_INC)
 endif
 ifeq ($(ASM_CPU),1)
-CFLAGS   += -DA26_ASM_CPU
+CFLAGS   += -DA26_ASM_CPU -DA26_ASM_TIA
+endif
+# PROFBUILD=1: static functions become global so the linker map names them
+# (for PROFPC); use a separate OUT directory
+ifeq ($(PROFBUILD),1)
+CFLAGS   += -Dstatic=
 endif
 
 CORE_SRC  := src/core/cpu.c src/core/bus.c src/core/tia.c src/core/riot.c \
@@ -32,21 +37,33 @@ CORE_SRC  := src/core/cpu.c src/core/bus.c src/core/tia.c src/core/riot.c \
 AMIGA_SRC := src/amiga/main_amiga.c src/amiga/hw.c src/amiga/video.c \
              src/amiga/vidconv.c src/amiga/audio.c src/amiga/input.c
 
-OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(OUT)/amiga/irq.o
+OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(OUT)/amiga/irq.o $(OUT)/amiga/vidconv_asm.o
 ifeq ($(ASM_CPU),1)
-OBJ += $(OUT)/core/cpu_asm.o $(OUT)/amiga/cpu6507.o
+OBJ += $(OUT)/core/cpu_asm.o $(OUT)/amiga/cpu6507.o $(OUT)/amiga/tia_asm.o $(OUT)/amiga/tiawr_asm.o
 endif
 
-.PHONY: all clean
+.PHONY: all clean map
 
 all: $(OUT)/A26
 
 $(OUT)/A26: $(OBJ)
 	$(VC) $(CONFIG) $(CPU) -o $@ $(OBJ) -lamiga
 
+# linker map for the PC profiler (PROFPC, tools/pcprof.py): same link as vc
+# does, so the code offsets match build/amiga/A26
+VBCCLIB ?= $(abspath $(dir $(shell which $(VC)))../m68k-amigaos/vbcc/lib)
+map: $(OBJ)
+	vlink -bamigahunk -x -Bstatic -Cvbcc -nostdlib -mrel $(VBCCLIB)/startup.o $(OBJ) -lamiga \
+	  -s -Rshort -L$(VBCCLIB) -lvc -o $(OUT)/A26.maplink -M$(OUT)/A26.map
+	@cmp -s $(OUT)/A26 $(OUT)/A26.maplink && echo "map matches A26" || echo "WARNING: map build differs from A26"
+
 $(OUT)/%.o: src/%.c src/core/*.h src/amiga/*.h
 	@mkdir -p $(dir $@)
 	$(VC) $(CFLAGS) -c $< -o $@
+
+$(OUT)/amiga/%_asm.o: src/amiga/%_asm.s src/amiga/tia_offs.i
+	@mkdir -p $(dir $@)
+	$(VASM) -m68030 -Fhunk -quiet -Isrc/amiga -o $@ $<
 
 $(OUT)/amiga/irq.o: src/amiga/irq.s
 	@mkdir -p $(dir $@)
@@ -67,15 +84,23 @@ TEST_OUT := $(OUT)/tests
 TEST_CF  := $(CONFIG) -c99 $(CPU) $(OPT) -DA26_BIG_ENDIAN
 
 .PHONY: tests
-tests: $(TEST_OUT)/a26host_c $(TEST_OUT)/a26host_asm $(TEST_OUT)/cputest_c $(TEST_OUT)/cputest_asm
+tests: $(TEST_OUT)/a26host_c $(TEST_OUT)/a26host_asm $(TEST_OUT)/cputest_c $(TEST_OUT)/cputest_asm $(TEST_OUT)/vidtest_asm $(TEST_OUT)/tiatest_asm
+
+$(TEST_OUT)/vidtest_asm: tests/vidconv_test.c src/amiga/vidconv.c $(CORE_SRC) src/core/*.h src/amiga/vidconv.h $(OUT)/amiga/vidconv_asm.o
+	@mkdir -p $(TEST_OUT)
+	$(VC) $(TEST_CF) -DA26_ASM_VIDEO -o $@ tests/vidconv_test.c src/amiga/vidconv.c $(CORE_SRC) $(OUT)/amiga/vidconv_asm.o
 
 $(TEST_OUT)/a26host_c: $(CORE_SRC) src/host/main_host.c src/core/*.h
 	@mkdir -p $(TEST_OUT)
 	$(VC) $(TEST_CF) -o $@ $(CORE_SRC) src/host/main_host.c
 
-$(TEST_OUT)/a26host_asm: $(CORE_SRC) src/core/cpu_asm.c src/host/main_host.c src/core/*.h $(OUT)/amiga/cpu6507.o
+$(TEST_OUT)/a26host_asm: $(CORE_SRC) src/core/cpu_asm.c src/host/main_host.c src/core/*.h $(OUT)/amiga/cpu6507.o $(OUT)/amiga/tia_asm.o $(OUT)/amiga/tiawr_asm.o
 	@mkdir -p $(TEST_OUT)
-	$(VC) $(TEST_CF) -DA26_ASM_CPU -o $@ $(CORE_SRC) src/core/cpu_asm.c src/host/main_host.c $(OUT)/amiga/cpu6507.o
+	$(VC) $(TEST_CF) -DA26_ASM_CPU -DA26_ASM_TIA -o $@ $(CORE_SRC) src/core/cpu_asm.c src/host/main_host.c $(OUT)/amiga/cpu6507.o $(OUT)/amiga/tia_asm.o $(OUT)/amiga/tiawr_asm.o
+
+$(TEST_OUT)/tiatest_asm: tests/tia_equiv.c $(CORE_SRC) src/core/*.h $(OUT)/amiga/tia_asm.o
+	@mkdir -p $(TEST_OUT)
+	$(VC) $(TEST_CF) -DA26_TIA_REFERENCE -DA26_ASM_TIA -o $@ tests/tia_equiv.c $(CORE_SRC) $(OUT)/amiga/tia_asm.o
 
 $(TEST_OUT)/cputest_c: tests/cpu_functional.c src/core/cpu.c src/core/*.h
 	@mkdir -p $(TEST_OUT)
@@ -84,3 +109,31 @@ $(TEST_OUT)/cputest_c: tests/cpu_functional.c src/core/cpu.c src/core/*.h
 $(TEST_OUT)/cputest_asm: tests/cpu_functional.c src/core/cpu.c src/core/cpu_asm.c src/core/*.h $(OUT)/amiga/cpu6507.o
 	@mkdir -p $(TEST_OUT)
 	$(VC) $(TEST_CF) -DA26_ASM_CPU -o $@ tests/cpu_functional.c src/core/cpu.c src/core/cpu_asm.c $(OUT)/amiga/cpu6507.o
+
+# ---- freestanding benchmark for tools/m68kprof (host 68k instruction
+# counter): core + asm CPU + video conversion, no OS, statics named.
+BENCH_OUT := build/m68kbench
+BENCH_SRC := $(CORE_SRC) src/core/cpu_asm.c src/amiga/vidconv.c tools/m68kprof/bench.c
+BENCH_OBJ := $(patsubst %.c,$(BENCH_OUT)/%.o,$(BENCH_SRC))
+
+.PHONY: bench
+bench: $(BENCH_OUT)/bench.exe
+
+$(BENCH_OUT)/%.o: %.c src/core/*.h src/amiga/*.h
+	@mkdir -p $(dir $@)
+	$(VC) $(CONFIG) -c99 $(CPU) $(OPT) -DA26_BIG_ENDIAN -DA26_ASM_CPU -DA26_ASM_VIDEO -DA26_ASM_TIA -Dstatic= -c $< -o $@
+
+$(BENCH_OUT)/start.o: tools/m68kprof/start.s
+	@mkdir -p $(dir $@)
+	$(VASM) -m68030 -Fhunk -quiet -o $@ $<
+
+$(BENCH_OUT)/cpu6507.o: src/amiga/cpu6507.s
+	@mkdir -p $(dir $@)
+	$(VASM) -m68030 -Fhunk -quiet -o $@ $<
+
+$(BENCH_OUT)/%_asm.o: src/amiga/%_asm.s src/amiga/tia_offs.i
+	@mkdir -p $(dir $@)
+	$(VASM) -m68030 -Fhunk -quiet -Isrc/amiga -o $@ $<
+
+$(BENCH_OUT)/bench.exe: $(BENCH_OUT)/start.o $(BENCH_OBJ) $(BENCH_OUT)/cpu6507.o $(BENCH_OUT)/vidconv_asm.o $(BENCH_OUT)/tia_asm.o $(BENCH_OUT)/tiawr_asm.o
+	vlink -bamigahunk -x -Bstatic -Cvbcc -nostdlib -mrel $^ -s -Rshort -L$(VBCCLIB) -lvc -o $@ -M$(BENCH_OUT)/bench.map

@@ -7,7 +7,16 @@
 
 u32 vc_stat_fallbacks;
 
-static u16 rgb12[128];          /* TIA colour index -> $0RGB */
+u16 vc_rgb12[128];              /* TIA colour index -> $0RGB */
+#define rgb12 vc_rgb12
+
+/* for vidconv_asm.s: colour byte -> register of the current line ($FF =
+ * none; entry 0, black, is always register 0) and the c2p pair table
+ * indexed by two register bytes read as a word (hi << 8 | lo), also
+ * pre-shifted by 4 */
+u8  vc_slotmap[256];
+u32 vc_c2p_w[0x0F10];
+u32 vc_c2p_w4[0x0F10];
 
 /* colour -> register of the current line; valid if stamp matches */
 static u8  slot_stamp[128];
@@ -30,7 +39,11 @@ static void c2p_init(void)
                 v |= nib << (24 - 8 * p);
             }
             c2p_pair[(a << 4) | b] = v;
+            vc_c2p_w[(a << 8) | b] = v;
+            vc_c2p_w4[(a << 8) | b] = v << 4;
         }
+    for (a = 0; a < 256; a++) vc_slotmap[a] = 0xFF;
+    vc_slotmap[0] = 0;
     c2p_ready = 1;
 }
 
@@ -120,7 +133,16 @@ void vc_c2p_line(const u8 *s, u32 *planes)
     }
 }
 
-int vc_convert_line(const u8 *tia_line, int bank, u32 *moves, u32 *planes)
+int vc_same_line_c(const u32 *a, const u32 *b)
+{
+    int i;
+    for (i = 0; i < VC_WIDTH / 4; i += 4)
+        if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2] || a[i + 3] != b[i + 3])
+            return 0;
+    return 1;
+}
+
+int vc_convert_line_c(const u8 *tia_line, int bank, u32 *moves, u32 *planes)
 {
     u8 slots[VC_WIDTH];
     int n = vc_map_line(tia_line, bank, moves, slots);
