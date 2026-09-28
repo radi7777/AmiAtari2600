@@ -122,6 +122,12 @@ typedef struct {
 
 extern Tia tia;
 
+/* one flag per framebuffer line: set whenever pixels of that line are
+ * drawn (lines that are not drawn keep the previous frame's pixels); the
+ * frontend clears it */
+extern u32 tia_line_drawn32[TIA_FB_LINES / 4];
+#define tia_line_drawn ((u8 *)tia_line_drawn32)
+
 /* framebuffer: TIA_FB_LINES * TIA_WIDTH bytes, must be 4-byte aligned */
 void tia_init(u8 *framebuffer, u8 *audiobuffer);
 void tia_reset(void);

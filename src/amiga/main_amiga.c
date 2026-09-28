@@ -358,6 +358,7 @@ static void run(void)
 
         t = hw_lines();
         a26_run_frame();
+        video_note_frame();
         prof_add(PH_EMU, hw_lines_since(t));
         prof.frames++;
 
@@ -386,7 +387,7 @@ static void run(void)
         prof.chip_writes += video_stat_writes;
         t = hw_lines();
         late = video_present(!opt.bench);
-        delay_update((t - t_work) & 0xFFFFFF, late);
+        delay_update(hw_lines_diff(t, t_work), late);
         prof_add(PH_WAIT, hw_lines_since(t));
         prof.rendered++;
         if (late) prof.late++;

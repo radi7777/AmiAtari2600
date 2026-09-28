@@ -4,12 +4,14 @@
  * Paula plays a buffer of LEN words in a loop and latches AUDxLC/AUDxLEN
  * at the start of each loop. So we simply write the next frame's buffer
  * address every frame: it is picked up as soon as the current buffer has
- * played, without interrupts. The buffer length is one Amiga frame at a
- * period of ~one raster line per sample, so buffers and frames line up.
+ * played, without interrupts. The period is about one raster line per
+ * sample. Since it is an integer, a fixed buffer length would drift
+ * against the display (NTSC: 96 colour clocks per frame, a repeated
+ * buffer every ~10 s; PAL every ~5 s). So the length is chosen per frame
+ * with an accumulator: on average one buffer lasts exactly one frame.
  *
- * The emulated frame may have a slightly different number of scanlines
- * (e.g. 262 vs. 263, or a game with an odd line count); the TIA samples
- * are stretched to the fixed buffer length with nearest-neighbour.
+ * The emulated frame's samples (one per scanline) are stretched to the
+ * buffer length with nearest-neighbour.
  */
 #include <exec/memory.h>
 #include <proto/exec.h>
@@ -22,7 +24,10 @@
 
 static BYTE *chipbuf;           /* [2 double][2 channel][BUF_MAX] */
 static int  cur;
-static int  buf_len;            /* samples per buffer (even) */
+static int  buf_len;            /* samples in the buffer being built (even) */
+static long frame_cc2;          /* colour clocks per display frame x 2 */
+static long period;             /* Paula period (colour clocks per sample) */
+static long acc2;               /* accumulated colour clocks x 2 */
 static int  running;
 static BYTE level[31];          /* TIA sum 0..30 -> signed sample */
 
@@ -53,19 +58,21 @@ static void set_channels(int d)
 
 void audio_start(int pal)
 {
-    /* colour clocks per frame / samples per frame */
-    long frame_cc = pal ? 227L * 313L : 227L * 263L + 131L;
-    int i, period;
+    int i;
 
     audio_stop();
+    /* colour clocks per display frame (x 2: NTSC lines are 227.5 clocks),
+     * non-interlaced long frames: PAL 313 x 227, NTSC 263 x 227.5 */
+    frame_cc2 = pal ? 2L * 227L * 313L : 455L * 263L;
     buf_len = pal ? 312 : 262;
-    period = (int)(frame_cc / buf_len);
+    period = frame_cc2 / (2L * buf_len);
+    acc2 = 0;
 
     for (i = 0; i < 4 * BUF_MAX; i++) chipbuf[i] = 0;
     set_channels(0);
     for (i = 0; i < 4; i++) {
         hw->aud[i].ac_len = (UWORD)(buf_len / 2);
-        hw->aud[i].ac_per = (UWORD)period;
+        hw->aud[i].ac_per = (UWORD)period;          /* length: set per frame */
         hw->aud[i].ac_vol = 64;
     }
     hw->dmacon = DMAF_SETCLR | DMAF_AUD0 | DMAF_AUD1 | DMAF_AUD2 | DMAF_AUD3;
@@ -87,6 +94,15 @@ void audio_frame(void)
     int ch;
 
     if (!running) return;
+    /* this buffer's length: whole sample pairs (Paula counts words) */
+    {
+        long words;
+        acc2 += frame_cc2;
+        words = acc2 / (4L * period);
+        if (words > BUF_MAX / 2) words = BUF_MAX / 2;
+        acc2 -= words * 4L * period;
+        buf_len = (int)(words * 2);
+    }
     for (ch = 0; ch < 2; ch++) {
         int n = a26_audio(ch, &src);
         /* chip RAM writes are slow on accelerated machines: build the
@@ -109,5 +125,7 @@ void audio_frame(void)
             dst[i] = tmp[i];
     }
     set_channels(cur);          /* latched when the playing buffer ends */
+    for (ch = 0; ch < 4; ch++)
+        hw->aud[ch].ac_len = (UWORD)(buf_len / 2);
     cur ^= 1;
 }

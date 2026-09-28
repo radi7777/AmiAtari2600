@@ -21,6 +21,9 @@ void video_render(const u8 *tia_fb, int fb_lines, int first);
  * frame. Returns 1 if the frame deadline was already missed (we are late). */
 int  video_present(int wait);
 
+/* call after every emulated frame (also skipped ones) */
+void video_note_frame(void);
+
 extern u32 video_stat_lines;    /* lines converted by the last video_render */
 extern u32 video_stat_writes;   /* chip RAM longwords written by it */
 

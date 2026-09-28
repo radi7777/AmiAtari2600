@@ -58,6 +58,24 @@ static int top = TOP_PAL;
 static u32 black_line[VC_WIDTH / 4];
 
 u32 video_stat_lines;                   /* lines converted in the last frame */
+
+/* framebuffer lines the TIA has drawn since each buffer was last
+ * rendered (collected by video_note_frame); untouched lines need no
+ * compare at all */
+static u32 drawn_acc32[2][TIA_FB_LINES / 4];
+static int last_first[2] = { -1, -1 };
+
+void video_note_frame(void)
+{
+    u32 *a = drawn_acc32[0], *b = drawn_acc32[1];
+    int i;
+    for (i = 0; i < TIA_FB_LINES / 4; i++) {
+        u32 d = tia_line_drawn32[i];
+        a[i] |= d;
+        b[i] |= d;
+        tia_line_drawn32[i] = 0;
+    }
+}
 u32 video_stat_writes;                  /* chip RAM longwords written */
 
 int video_init(void)
@@ -173,6 +191,9 @@ void video_render(const u8 *tia_fb, int fb_lines, int first)
     u32 converted = 0, written = 0;
     int y;
 
+    const u8 *acc = (const u8 *)drawn_acc32[back];
+    int same_first = last_first[back] == first;
+
     for (y = 0; y < height; y++) {
         int src = first + y;
         const u32 *line;
@@ -181,12 +202,12 @@ void video_render(const u8 *tia_fb, int fb_lines, int first)
         int n, i, p;
 
         if (src >= 0 && src < fb_lines) {
-            /* skip the run of unchanged lines in one go */
-            int end = fb_lines - first < height ? fb_lines - first : height;
-            y += vc_scan_same(tia_fb + src * VC_WIDTH, b->shadow[y], &b->valid[y], end - y);
-            if (y >= end) { y = end - 1; continue; }
-            src = first + y;
+            /* not drawn since this buffer showed it: nothing to compare */
+            if (same_first && b->valid[y] && !acc[src])
+                continue;
             line = (const u32 *)(const void *)(tia_fb + src * VC_WIDTH);
+            if (b->valid[y] && vc_same_line(line, b->shadow[y]))
+                continue;
         } else {
             line = black_line;
             if (b->valid[y] && vc_same_line(line, b->shadow[y]))
@@ -222,6 +243,8 @@ void video_render(const u8 *tia_fb, int fb_lines, int first)
         b->valid[y] = 1;
         converted++;
     }
+    memset(drawn_acc32[back], 0, sizeof(drawn_acc32[back]));
+    last_first[back] = first;
     video_stat_lines = converted;
     video_stat_writes = written;
 }

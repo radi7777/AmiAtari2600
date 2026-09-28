@@ -892,8 +892,15 @@ static void render(int x0, int x1)
     draw(out, x0, x1);
 }
 
+/* set when pixels of a framebuffer line are drawn (the frontend clears
+ * it); lines not drawn keep last frame's pixels, see video.c */
+u32 tia_line_drawn32[TIA_FB_LINES / 4];
+
 static void draw(u8 *out, int x0, int x1)
 {
+#ifndef A26_ASM_TIA
+    if ((unsigned)tia.line < TIA_FB_LINES) tia_line_drawn[tia.line] = 1;
+#endif
 #ifdef A26_ASM_TIA
     tia_render(out, x0, x1);
     return;

@@ -29,9 +29,8 @@ static void bench_render(const u8 *fb, int first)
     for (y = 0; y < HEIGHT; y++) {
         const u32 *line = (const u32 *)(const void *)(fb + (first + y) * VC_WIDTH);
         int n;
-        y += vc_scan_same((const u8 *)line, shadow[y], &valid[y], HEIGHT - y);
-        if (y >= HEIGHT) break;
-        line = (const u32 *)(const void *)(fb + (first + y) * VC_WIDTH);
+        if (valid[y] && !tia_line_drawn[first + y]) continue;
+        if (valid[y] && vc_same_line(line, shadow[y])) continue;
         n = vc_convert_line((const u8 *)line, y & 1, moves, pl);
         for (i = n; i < nmoves[y]; i++) moves[i] = 0x01FE0000UL;
         for (i = 0; i < n || i < nmoves[y]; i++)
@@ -54,6 +53,7 @@ int main(void)
         P[P_MARK] = f;                  /* m68kprof starts counting at frame P_MARK */
         a26_run_frame();
         if (P[P_VIDEO]) bench_render(a26_framebuffer(), 30);
+        { int i; for (i = 0; i < TIA_FB_LINES / 4; i++) tia_line_drawn32[i] = 0; }
     }
     P[P_LINES] = (u32)tia.frame_lines;
     return 0;

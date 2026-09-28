@@ -16,6 +16,7 @@
         xref    _tia_zero_mask          ; u8 [320], all 0
         xref    _tia_prio_table         ; u8 [2][64]
         xref    _tia_rep4               ; u32 [3]: background, PF left, PF right x 4
+        xref    _tia_line_drawn32       ; u8 [320]
 
         include "tia_offs.i"
 
@@ -62,6 +63,12 @@ fill:
 _tia_render:
         movem.l d2-d7/a2-a6,-(sp)
         lea     _tia,a6
+        move.l  T_LINE(a6),d2           ; mark the line as drawn
+        cmp.l   #320,d2
+        bhs.s   .nd
+        lea     _tia_line_drawn32,a1
+        st      (a1,d2.l)
+.nd:
         move.l  4+44(sp),a0             ; out
         move.l  8+44(sp),d0             ; x0
         move.l  12+44(sp),d1            ; x1

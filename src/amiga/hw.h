@@ -57,6 +57,9 @@ int  hw_beam_line(void);        /* current vertical beam position */
 /* free-running raster line counter (CIA-B TOD, counts HSYNC, 24 bit).
  * One line = 64 us (PAL) / 63.5 us (NTSC). Use hw_lines_since(). */
 ULONG hw_lines(void);
-#define hw_lines_since(t) ((hw_lines() - (t)) & 0xFFFFFF)
+/* a difference that comes out negative (the VBL counter is incremented a
+ * little after line 0 starts) counts as 0 */
+#define hw_lines_diff(a, b) ((((a) - (b)) & 0xFFFFFF) >= 0x800000 ? 0 : (((a) - (b)) & 0xFFFFFF))
+#define hw_lines_since(t) hw_lines_diff(hw_lines(), (t))
 
 #endif
