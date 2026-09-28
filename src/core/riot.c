@@ -30,7 +30,11 @@ void riot_reset(void)
     riot.swacnt = riot.swbcnt = 0;
     riot.swa_out = riot.swb_out = 0;
     riot.timer_set_cycle = a26_cycles;
-    riot.timer_start = (s32)((u32)((a26_cycles * 7u) & 0xFF) << 10); /* arbitrary start */
+    /* powers up counting in 1024-cycle steps from some value, as Stella
+     * does. A start value of 0 (expired at once, then counting every
+     * cycle) hung Berzerk and H.E.R.O.: their first "LDA INTIM ; BNE"
+     * loop takes 8 cycles and only ever saw every 8th value, never 0. */
+    riot.timer_start = (s32)((u32)(0x10 + ((a26_cycles * 7u) & 0x3F)) << 10);
     riot.timer_shift = 10;
     riot.timint_cleared = 0;
     riot.pa7_flag = 1;
