@@ -6,27 +6,31 @@
 #include "../core/palette.h"
 
 u32 vc_stat_fallbacks;
-u32 vc_stat_moves;
 
 static u16 rgb12[128];          /* TIA colour index -> $0RGB */
-static u8  slot_of[128];        /* TIA colour index -> register, 0xFF = not loaded */
-static u8  color_in[32];        /* register -> TIA colour index, 0xFF = free */
-static u16 last_used[32];       /* line stamp for LRU */
-static u16 line_stamp;
 
-/* c2p tables: planes 0-3 in the bytes of a longword, plane 4 separately */
-static u32 c2p_lo[32];
-static u8  c2p_hi[32];
+/* colour -> register of the current line; valid if stamp matches */
+static u8  slot_stamp[128];
+static u8  slot_of[128];
+static u8  stamp;
+
+/* c2p: a pair of TIA pixels (register a, b) -> for each of planes 1-4 a
+ * nibble aabb, plane p in the low nibble of byte p (byte 0 = MSB) */
+static u32 c2p_pair[256];
 static int c2p_ready;
 
 static void c2p_init(void)
 {
-    int s;
-    for (s = 0; s < 32; s++) {
-        c2p_lo[s] = ((s & 1) ? 0xC0000000UL : 0) | ((s & 2) ? 0x00C00000UL : 0) |
-                    ((s & 4) ? 0x0000C000UL : 0) | ((s & 8) ? 0x000000C0UL : 0);
-        c2p_hi[s] = (u8)((s & 16) ? 0xC0 : 0);
-    }
+    int a, b, p;
+    for (a = 0; a < 16; a++)
+        for (b = 0; b < 16; b++) {
+            u32 v = 0;
+            for (p = 0; p < 4; p++) {
+                u32 nib = (u32)((((a >> p) & 1) ? 0xC : 0) | (((b >> p) & 1) ? 0x3 : 0));
+                v |= nib << (24 - 8 * p);
+            }
+            c2p_pair[(a << 4) | b] = v;
+        }
     c2p_ready = 1;
 }
 
@@ -35,17 +39,6 @@ void vc_set_palette(const u32 *palette24)
     int i;
     for (i = 0; i < 128; i++) rgb12[i] = palette_to_rgb12(palette24[i]);
     if (!c2p_ready) c2p_init();
-    vc_begin_frame();
-}
-
-void vc_begin_frame(void)
-{
-    int i;
-    for (i = 0; i < 128; i++) slot_of[i] = 0xFF;
-    for (i = 0; i < 32; i++) { color_in[i] = 0xFF; last_used[i] = 0; }
-    line_stamp = 1;
-    vc_stat_fallbacks = 0;
-    vc_stat_moves = 0;
 }
 
 static int rgb_dist(u16 a, u16 b)
@@ -56,99 +49,81 @@ static int rgb_dist(u16 a, u16 b)
     return dr * dr * 3 + dg * dg * 4 + db * db * 2;
 }
 
-/* nearest register among those already used by this line */
-static u8 nearest(u8 c, u32 used)
+int vc_map_line(const u8 *tia_line, int bank, u32 *moves, u8 *slots)
 {
-    int s, best = 0, bd = 0x7FFFFFFF;
-    for (s = 0; s < 32; s++) {
-        if ((used & (1UL << s)) && color_in[s] != 0xFF) {
-            int d = rgb_dist(rgb12[c], rgb12[color_in[s]]);
-            if (d < bd) { bd = d; best = s; }
-        }
-    }
-    return (u8)best;
-}
+    u8 col[VC_BANK_COLOURS];
+    u32 reg_base = 0x180 + (u32)bank * VC_BANK_COLOURS * 2;
+    int n = 1, x;
+    u8 prev_c, prev_s;
 
-int vc_map_line(const u8 *tia_line, u8 *slots, VcMove *moves)
-{
-    u32 used = 0;
-    int nmoves = 0, x;
-    u8 prev_c = 0xFF, prev_s = 0;
+    if (++stamp == 0) {
+        for (x = 0; x < 128; x++) slot_stamp[x] = 0;
+        stamp = 1;
+    }
+    /* register 0 of the bank is black */
+    col[0] = 0;
+    slot_stamp[0] = stamp;
+    slot_of[0] = 0;
+    prev_c = 0;
+    prev_s = 0;
 
     for (x = 0; x < VC_WIDTH; x++) {
         u8 c = (u8)(tia_line[x] >> 1);
-        u8 s;
-        if (c == prev_c) { slots[x] = prev_s; continue; }
-        s = slot_of[c];
-        if (s == 0xFF) {
-            /* load the colour into the least recently used free register */
-            int best = -1, r;
-            if (nmoves < VC_MAX_MOVES) {
-                u16 oldest = 0xFFFF;
-                for (r = 0; r < 32; r++) {
-                    if (used & (1UL << r)) continue;
-                    if (color_in[r] == 0xFF) { best = r; break; }
-                    if (last_used[r] < oldest) { oldest = last_used[r]; best = r; }
+        if (c != prev_c) {
+            prev_c = c;
+            if (slot_stamp[c] != stamp) {
+                slot_stamp[c] = stamp;
+                if (n < VC_BANK_COLOURS) {
+                    col[n] = c;
+                    slot_of[c] = (u8)n;
+                    moves[n - 1] = ((reg_base + (u32)n * 2) << 16) | rgb12[c];
+                    n++;
+                } else {
+                    int s, best = 0, bd = 0x7FFFFFFF;
+                    for (s = 0; s < VC_BANK_COLOURS; s++) {
+                        int d = rgb_dist(rgb12[c], rgb12[col[s]]);
+                        if (d < bd) { bd = d; best = s; }
+                    }
+                    slot_of[c] = (u8)best;
                 }
             }
-            if (best >= 0) {
-                if (color_in[best] != 0xFF) slot_of[color_in[best]] = 0xFF;
-                color_in[best] = c;
-                slot_of[c] = (u8)best;
-                moves[nmoves].reg = (u16)best;
-                moves[nmoves].rgb = rgb12[c];
-                nmoves++;
-                s = (u8)best;
-            } else {
-                s = nearest(c, used);
-                vc_stat_fallbacks++;
-                /* not cached: the substitute must not become the colour's slot */
-                slots[x] = s;
-                prev_c = 0xFF;
-                used |= 1UL << s;
-                last_used[s] = line_stamp;
-                continue;
-            }
+            prev_s = slot_of[c];
+            if (n == VC_BANK_COLOURS && col[prev_s] != c) vc_stat_fallbacks++;
+        } else if (n == VC_BANK_COLOURS && col[prev_s] != c) {
+            vc_stat_fallbacks++;
         }
-        used |= 1UL << s;
-        last_used[s] = line_stamp;
-        slots[x] = s;
-        prev_c = c;
-        prev_s = s;
+        slots[x] = prev_s;
     }
-    line_stamp++;
-    vc_stat_moves += (u32)nmoves;
-    return nmoves;
+    return n - 1;
 }
 
-#ifdef A26_BIG_ENDIAN
-#define PUT32(p, v) (*(u32 *)(void *)(p) = (v))
-#else
-#define PUT32(p, v) do { u8 *q_ = (p); u32 v_ = (v); \
-        q_[0] = (u8)(v_ >> 24); q_[1] = (u8)(v_ >> 16); q_[2] = (u8)(v_ >> 8); q_[3] = (u8)v_; } while (0)
-#endif
-
-void vc_c2p_line(const u8 *s, u8 *dst)
+void vc_c2p_line(const u8 *s, u32 *planes)
 {
     int g;
     /* 16 TIA pixels = 32 lowres pixels = one longword per plane */
-    for (g = 0; g < VC_WIDTH / 16; g++) {
-        u32 a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0;
-        int k;
-        for (k = 0; k < 4; k++) {
-            u32 v = c2p_lo[s[0]] | (c2p_lo[s[1]] >> 2) | (c2p_lo[s[2]] >> 4) | (c2p_lo[s[3]] >> 6);
-            u32 w = (u32)(c2p_hi[s[0]] | (c2p_hi[s[1]] >> 2) | (c2p_hi[s[2]] >> 4) | (c2p_hi[s[3]] >> 6));
-            a0 = (a0 << 8) | (v >> 24);
-            a1 = (a1 << 8) | ((v >> 16) & 0xFF);
-            a2 = (a2 << 8) | ((v >> 8) & 0xFF);
-            a3 = (a3 << 8) | (v & 0xFF);
-            a4 = (a4 << 8) | w;
-            s += 4;
-        }
-        PUT32(dst + 0 * VC_ROW_BYTES + g * 4, a0);
-        PUT32(dst + 1 * VC_ROW_BYTES + g * 4, a1);
-        PUT32(dst + 2 * VC_ROW_BYTES + g * 4, a2);
-        PUT32(dst + 3 * VC_ROW_BYTES + g * 4, a3);
-        PUT32(dst + 4 * VC_ROW_BYTES + g * 4, a4);
+    for (g = 0; g < VC_ROW_LONGS; g++) {
+        /* v_k: byte p = plane p bits of TIA pixels 4k..4k+3 */
+        u32 v0 = (c2p_pair[(s[0] << 4) | s[1]] << 4) | c2p_pair[(s[2] << 4) | s[3]];
+        u32 v1 = (c2p_pair[(s[4] << 4) | s[5]] << 4) | c2p_pair[(s[6] << 4) | s[7]];
+        u32 v2 = (c2p_pair[(s[8] << 4) | s[9]] << 4) | c2p_pair[(s[10] << 4) | s[11]];
+        u32 v3 = (c2p_pair[(s[12] << 4) | s[13]] << 4) | c2p_pair[(s[14] << 4) | s[15]];
+        /* 4x4 byte transpose */
+        u32 t0 = (v0 & 0xFF00FF00UL) | ((v1 >> 8) & 0x00FF00FFUL);
+        u32 t1 = ((v0 << 8) & 0xFF00FF00UL) | (v1 & 0x00FF00FFUL);
+        u32 t2 = (v2 & 0xFF00FF00UL) | ((v3 >> 8) & 0x00FF00FFUL);
+        u32 t3 = ((v2 << 8) & 0xFF00FF00UL) | (v3 & 0x00FF00FFUL);
+        planes[0 * VC_ROW_LONGS + g] = (t0 & 0xFFFF0000UL) | (t2 >> 16);
+        planes[1 * VC_ROW_LONGS + g] = (t1 & 0xFFFF0000UL) | (t3 >> 16);
+        planes[2 * VC_ROW_LONGS + g] = (t0 << 16) | (t2 & 0xFFFFUL);
+        planes[3 * VC_ROW_LONGS + g] = (t1 << 16) | (t3 & 0xFFFFUL);
+        s += 16;
     }
+}
+
+int vc_convert_line(const u8 *tia_line, int bank, u32 *moves, u32 *planes)
+{
+    u8 slots[VC_WIDTH];
+    int n = vc_map_line(tia_line, bank, moves, slots);
+    vc_c2p_line(slots, planes);
+    return n;
 }

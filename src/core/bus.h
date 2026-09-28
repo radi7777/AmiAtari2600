@@ -20,6 +20,11 @@ extern u32 a26_cycles;      /* CPU cycle counter (wraps, use differences) */
 extern int a26_stop;        /* request cpu_run() to return early */
 extern u8  a26_databus;     /* last value seen on the data bus */
 
+/* Called right before the emulated program reads the joystick ports
+ * (SWCHA, INPT4/INPT5), so a frontend can sample its input as late as
+ * possible. May be NULL. */
+extern void (*a26_input_hook)(void);
+
 u8   bus_read(u16 addr);
 void bus_write(u16 addr, u8 val);
 

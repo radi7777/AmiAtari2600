@@ -16,6 +16,7 @@
 #include "../core/atari.h"
 #include "../core/palette.h"
 #include "../core/cpu.h"
+#include "../core/riot.h"
 
 static u8 *load_file(const char *name, u32 *size)
 {
@@ -64,9 +65,28 @@ static void put_le(FILE *f, u32 v, int bytes)
     while (bytes--) { fputc((int)(v & 0xFF), f); v >>= 8; }
 }
 
+/* raw TIA colours of the frame just completed (for tools/refcompare.py):
+ * "<lines>\n" followed by lines x 160 bytes */
+static void write_raw(const char *prefix, int frame)
+{
+    char name[512];
+    FILE *f;
+    int lines = tia.frame_lines < TIA_FB_LINES ? tia.frame_lines : TIA_FB_LINES;
+    sprintf(name, "%.480s%04d.raw", prefix, frame);
+    f = fopen(name, "wb");
+    if (!f) return;
+    fprintf(f, "%d\n", lines);
+    fwrite(a26_framebuffer(), 1, (size_t)lines * TIA_WIDTH, f);
+    fclose(f);
+}
+
 int main(int argc, char **argv)
 {
-    const char *rom_name = NULL, *ppm = NULL, *wav = NULL;
+    const char *rom_name = NULL, *ppm = NULL, *wav = NULL, *raw = NULL;
+    int raw_from = 0;
+#ifdef A26_TRACE
+    int trace_frame = -1;
+#endif
     int frames = 120, bench = 0, quiet = 0, i;
     int reset_frame = -1, fire_frame = -1;
     CartType type = CART_UNKNOWN;
@@ -88,6 +108,12 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "-reset") && i + 1 < argc) reset_frame = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-fire") && i + 1 < argc) fire_frame = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-raw") && i + 1 < argc) raw = argv[++i];
+        else if (!strcmp(argv[i], "-rawfrom") && i + 1 < argc) raw_from = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-clean")) riot_clean_start = 1;
+#ifdef A26_TRACE
+        else if (!strcmp(argv[i], "-trace") && i + 1 < argc) trace_frame = atoi(argv[++i]);
+#endif
         else if (!strcmp(argv[i], "-bench")) bench = 1;
         else if (!strcmp(argv[i], "-q")) quiet = 1;
         else if (argv[i][0] != '-') rom_name = argv[i];
@@ -95,7 +121,7 @@ int main(int argc, char **argv)
     }
     if (!rom_name) {
         fprintf(stderr, "usage: %s rom.bin [-frames N] [-ppm f] [-wav f] [-type T]"
-                        " [-region pal|ntsc] [-reset F] [-fire F] [-bench] [-q]\n", argv[0]);
+                        " [-region pal|ntsc] [-reset F] [-fire F] [-raw prefix] [-rawfrom F] [-bench] [-q]\n", argv[0]);
         return 2;
     }
     rom = load_file(rom_name, &size);
@@ -109,7 +135,8 @@ int main(int argc, char **argv)
 
     if (wav) {
         wf = fopen(wav, "wb");
-        if (wf) fseek(wf, 44, SEEK_SET);
+        /* reserve the header (AmigaDOS cannot seek past the end of a file) */
+        if (wf) for (i = 0; i < 44; i++) fputc(0, wf);
     }
 
     t0 = clock();
@@ -119,7 +146,11 @@ int main(int argc, char **argv)
         if (fire_frame >= 0 && i >= fire_frame && i < fire_frame + 5) joy |= JOY_FIRE;
         a26_set_switches(sw);
         a26_set_joystick(0, joy);
+#ifdef A26_TRACE
+        { extern int tia_trace; tia_trace = (i == trace_frame); }
+#endif
         a26_run_frame();
+        if (raw && i >= raw_from) write_raw(raw, i);
         if (wf) {
             const u8 *s0, *s1;
             int n = a26_audio(0, &s0), k;
@@ -138,8 +169,10 @@ int main(int argc, char **argv)
     }
 
     if (bench) {
-        double s = (double)(clock() - t0) / CLOCKS_PER_SEC;
-        printf("bench: %d frames in %.3f s = %.1f fps\n", frames, s, s > 0 ? frames / s : 0.0);
+        /* integer maths: no floating point library needed on the Amiga */
+        unsigned long ms = (unsigned long)((clock() - t0) * 1000 / CLOCKS_PER_SEC);
+        unsigned long fps10 = ms ? (unsigned long)frames * 10000UL / ms : 0;
+        printf("bench: %d frames in %lu ms = %lu.%lu fps\n", frames, ms, fps10 / 10, fps10 % 10);
     }
 
     printf("rom: %s  size: %lu  type: %s  region: %s  lines: %d (avg %d)  visible: %d-%d%s\n",

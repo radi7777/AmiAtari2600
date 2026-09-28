@@ -1,0 +1,26 @@
+; vcs.inc - TIA / RIOT register names for the test ROMs
+VSYNC  = $00
+VBLANK = $01
+WSYNC  = $02
+NUSIZ0 = $04
+NUSIZ1 = $05
+COLUP0 = $06
+COLUP1 = $07
+COLUPF = $08
+COLUBK = $09
+CTRLPF = $0A
+PF0    = $0D
+PF1    = $0E
+PF2    = $0F
+RESP0  = $10
+RESP1  = $11
+AUDC0  = $15
+AUDF0  = $17
+AUDV0  = $19
+GRP0   = $1B
+GRP1   = $1C
+HMP0   = $20
+HMOVE  = $2A
+HMCLR  = $2B
+INTIM  = $284
+TIM64T = $296

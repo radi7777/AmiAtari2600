@@ -1,6 +1,9 @@
 build/
-roms/
+/roms/
 *.o
 *.ppm
 *.wav
 .DS_Store
+tools/refdump/refdump
+tools/refdump/go.sum
+__pycache__/

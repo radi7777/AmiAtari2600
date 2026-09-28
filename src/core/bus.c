@@ -9,6 +9,7 @@
 u32 a26_cycles;
 int a26_stop;
 u8  a26_databus;
+void (*a26_input_hook)(void);
 
 u8 bus_read(u16 addr)
 {

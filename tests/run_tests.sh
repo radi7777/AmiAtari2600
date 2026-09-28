@@ -50,11 +50,12 @@ out=$($A26HOST $B/bank_f8.bin -frames 30 -ppm $B/bank_f8.ppm -q)
 echo "$out" | grep -q "type: F8" && ok "F8 autodetected" || fail "F8 detection: $out"
 python3 tests/check.py row $B/bank_f8.ppm 50 0:2d32b8 159:2d32b8 && ok "F8 bank switch" || fail "F8 bank switch"
 
-$A26HOST $B/cpu_paths.bin -frames 31 -ppm $B/cpu_paths.ppm -q >/dev/null
-# delay loop: 8 cycles per iteration incl. the page-crossing penalty -> 24 px steps
-python3 tests/check.py row $B/cpu_paths.ppm 20 89:767676 90:d2d2d2 97:d2d2d2 98:767676 \
-  && python3 tests/check.py row $B/cpu_paths.ppm 21 66:d2d2d2 73:d2d2d2 74:767676 \
-  && python3 tests/check.py row $B/cpu_paths.ppm 23 18:d2d2d2 25:d2d2d2 \
+out=$($A26HOST $B/cpu_paths.bin -frames 31 -ppm $B/cpu_paths.ppm -q)
+echo "$out" | grep -q "lines: 262" || fail "cpu_paths timing: $out"
+# P0: loop with a page-crossing branch (pixel 39 without the penalty),
+# P1: loop running in RIOT RAM, blue background: set by bank 0 after a
+# bankswitch from code in page $1Fxx
+python3 tests/check.py row $B/cpu_paths.ppm 100 0:2d32b8 41:2d32b8 42:5cba5c 43:2d32b8 50:2d32b8 51:b83232 52:2d32b8 \
   && ok "branch page-crossing penalty, slow-page code, bankswitch from \$1Fxx" \
   || fail "cpu_paths"
 

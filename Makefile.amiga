@@ -32,7 +32,7 @@ CORE_SRC  := src/core/cpu.c src/core/bus.c src/core/tia.c src/core/riot.c \
 AMIGA_SRC := src/amiga/main_amiga.c src/amiga/hw.c src/amiga/video.c \
              src/amiga/vidconv.c src/amiga/audio.c src/amiga/input.c
 
-OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC) $(AMIGA_SRC))
+OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(OUT)/amiga/irq.o
 ifeq ($(ASM_CPU),1)
 OBJ += $(OUT)/core/cpu_asm.o $(OUT)/amiga/cpu6507.o
 endif
@@ -42,11 +42,15 @@ endif
 all: $(OUT)/A26
 
 $(OUT)/A26: $(OBJ)
-	$(VC) $(CONFIG) $(CPU) -o $@ $(OBJ)
+	$(VC) $(CONFIG) $(CPU) -o $@ $(OBJ) -lamiga
 
 $(OUT)/%.o: src/%.c src/core/*.h src/amiga/*.h
 	@mkdir -p $(dir $@)
 	$(VC) $(CFLAGS) -c $< -o $@
+
+$(OUT)/amiga/irq.o: src/amiga/irq.s
+	@mkdir -p $(dir $@)
+	$(VASM) -m68030 -Fhunk -quiet -o $@ $<
 
 $(OUT)/amiga/cpu6507.o: src/amiga/cpu6507.s
 	@mkdir -p $(dir $@)
@@ -54,3 +58,29 @@ $(OUT)/amiga/cpu6507.o: src/amiga/cpu6507.s
 
 clean:
 	rm -rf $(OUT)
+
+# ---- test binaries for an Amiga or an Amiga emulator (tests/amiga_tests.sh):
+# the host test harness with the C core and with the assembler core, plus
+# the 6502 functional test for both. Run them on the Amiga and compare the
+# output files on the host.
+TEST_OUT := $(OUT)/tests
+TEST_CF  := $(CONFIG) -c99 $(CPU) $(OPT) -DA26_BIG_ENDIAN
+
+.PHONY: tests
+tests: $(TEST_OUT)/a26host_c $(TEST_OUT)/a26host_asm $(TEST_OUT)/cputest_c $(TEST_OUT)/cputest_asm
+
+$(TEST_OUT)/a26host_c: $(CORE_SRC) src/host/main_host.c src/core/*.h
+	@mkdir -p $(TEST_OUT)
+	$(VC) $(TEST_CF) -o $@ $(CORE_SRC) src/host/main_host.c
+
+$(TEST_OUT)/a26host_asm: $(CORE_SRC) src/core/cpu_asm.c src/host/main_host.c src/core/*.h $(OUT)/amiga/cpu6507.o
+	@mkdir -p $(TEST_OUT)
+	$(VC) $(TEST_CF) -DA26_ASM_CPU -o $@ $(CORE_SRC) src/core/cpu_asm.c src/host/main_host.c $(OUT)/amiga/cpu6507.o
+
+$(TEST_OUT)/cputest_c: tests/cpu_functional.c src/core/cpu.c src/core/*.h
+	@mkdir -p $(TEST_OUT)
+	$(VC) $(TEST_CF) -o $@ tests/cpu_functional.c src/core/cpu.c
+
+$(TEST_OUT)/cputest_asm: tests/cpu_functional.c src/core/cpu.c src/core/cpu_asm.c src/core/*.h $(OUT)/amiga/cpu6507.o
+	@mkdir -p $(TEST_OUT)
+	$(VC) $(TEST_CF) -DA26_ASM_CPU -o $@ tests/cpu_functional.c src/core/cpu.c src/core/cpu_asm.c $(OUT)/amiga/cpu6507.o

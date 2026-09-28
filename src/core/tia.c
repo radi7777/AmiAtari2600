@@ -28,6 +28,10 @@
  * Amiga raster line.
  */
 #include <string.h>
+#ifdef A26_TRACE
+#include <stdio.h>
+int tia_trace;
+#endif
 #include "tia.h"
 #include "bus.h"
 
@@ -35,7 +39,7 @@ Tia tia;
 
 /* ---- lookup tables -------------------------------------------------- */
 
-static u8  player_mask[8][320];     /* bit mask (0x80 = first pixel) */
+static u8  player_mask[2][8][320];  /* [no main copy][nusiz] bit mask (0x80 = first pixel) */
 static u8  missile_mask[8][4][320]; /* 0/1 */
 static u8  ball_mask[4][320];
 static u32 pf_mask[2][TIA_WIDTH];   /* [reflect][x] -> bit in tia.pf */
@@ -47,9 +51,14 @@ static int tables_ready;
 /* pixel runs of each mask table: (offset, length) pairs, offset relative to
  * the object position. At most 3 copies -> 3 runs. */
 #define MAX_RUNS 3
-static u8  player_runs[8][MAX_RUNS * 2], player_nruns[8];
+static u8  player_runs[2][8][MAX_RUNS * 2], player_nruns[2][8];
 static u8  missile_runs[8][4][MAX_RUNS * 2], missile_nruns[8][4];
 static u8  ball_runs[4][2], ball_nruns[4];
+
+/* masks of locked missiles/ball (M0, M1, BL), absolute x, built on demand */
+static u8  lock_mask[3][320];
+#define LOCK_RUNS 8             /* 3 copies, each may wrap around the edge */
+static u8  lock_runs[3][LOCK_RUNS * 2];
 
 #ifdef A26_TIA_REFERENCE
 int tia_use_reference;          /* 1 = original per-pixel renderer */
@@ -69,6 +78,117 @@ int tia_use_reference;          /* 1 = original per-pixel renderer */
 #define C_BL 2
 #define C_P0 3
 #define C_P1 4
+
+/* HMOVE displacement in pixels (+ = right) by HMxx nibble and the CPU
+ * cycle of the HMOVE write within the line (0..75). Measured from
+ * gopher2600 with tools/gen_hmove_rom.py; identical for all objects.
+ * Cycles 0-2 behave like 3, 75 like 74. */
+static const s8 hmove_disp[16][76] = {
+    {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,  -1,  -2,  -2,  -3,  -4,  -5,  -5,  -6,  -7,  -8,  -8,  -8 },
+    {  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,  -1,  -2,  -3,  -3,  -4,  -5,  -6,  -6,  -7,  -8,  -9,  -9,  -9 },
+    {  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,  -1,  -1,  -2,  -3,  -4,  -4,  -5,  -6,  -7,  -7,  -8,  -9, -10, -10, -10 },
+    {  -3,  -3,  -3,  -3,  -3,  -3,  -3,  -3,  -3,  -2,  -2,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,  -1,  -2,  -2,  -3,  -4,  -5,  -5,  -6,  -7,  -8,  -8,  -9, -10, -11, -11, -11 },
+    {  -4,  -4,  -4,  -4,  -4,  -4,  -4,  -4,  -3,  -2,  -2,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,  -1,  -2,  -3,  -3,  -4,  -5,  -6,  -6,  -7,  -8,  -9,  -9, -10, -11, -12, -12, -12 },
+    {  -5,  -5,  -5,  -5,  -5,  -5,  -5,  -4,  -3,  -2,  -2,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+       -1,  -1,  -2,  -3,  -4,  -4,  -5,  -6,  -7,  -7,  -8,  -9, -10, -10, -11, -12, -13, -13, -13 },
+    {  -6,  -6,  -6,  -6,  -6,  -5,  -5,  -4,  -3,  -2,  -2,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,
+       -2,  -2,  -3,  -4,  -5,  -5,  -6,  -7,  -8,  -8,  -9, -10, -11, -11, -12, -13, -14, -14, -14 },
+    {  -7,  -7,  -7,  -7,  -6,  -5,  -5,  -4,  -3,  -2,  -2,  -1,   0,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -2,
+       -3,  -3,  -4,  -5,  -6,  -6,  -7,  -8,  -9,  -9, -10, -11, -12, -12, -13, -14, -15, -15, -15 },
+    {   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,   8,
+        8,   8,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0 },
+    {   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,   7,
+        7,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -1,  -1 },
+    {   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,   6,
+        6,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -2,  -2,  -2 },
+    {   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -2,  -3,  -3,  -3 },
+    {   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -1,  -2,  -3,  -4,  -4,  -4 },
+    {   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -2,  -2,  -3,  -4,  -5,  -5,  -5 },
+    {   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,  -2,  -3,  -3,  -4,  -5,  -6,  -6,  -6 },
+    {   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   2,   3,   4,   4,
+        5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,  -1,  -1,  -2,  -3,  -4,  -4,  -5,  -6,  -7,  -7,  -7 }
+};
+
+/* The model behind the table (it reproduces every entry): HMOVE written in
+ * CPU cycle w starts a ripple counter that ticks every 4 colour clocks from
+ * t0 = 3w + 2 rounded up to a multiple of 4 (relative to the line start).
+ * An object gets an extra clock on each tick until the tick number equals
+ * its count v = HM nibble ^ 8. An extra clock moves the object one pixel
+ * left if it falls into the horizontal blank: before clock 70 on a line
+ * with the HMOVE blank, before 68 otherwise, at 224 or later (end of the
+ * line), or in the next line's blank. The HMOVE blank itself shifts the
+ * objects 8 pixels right. Used for HMxx writes during the ripple. */
+static int hmove_t0(int w)
+{
+    return ((3 * w + 2 + 3) / 4) * 4;
+}
+
+static int hmove_calc(int w, int count)
+{
+    int blank = w <= 20, t0 = hmove_t0(w), k, moved = 0;
+    for (k = 0; k < count; k++) {
+        int t = t0 + 4 * k;
+        if (t < TIA_LINE_CC) {
+            if (blank ? t < 70 : (t < TIA_HBLANK || t >= 224)) moved++;
+        } else if (t - TIA_LINE_CC < TIA_HBLANK) {
+            moved++;
+        }
+    }
+    return (blank ? 8 : 0) - moved;
+}
+
+/* Drawing of a missile or the ball that is "locked" in HMOVE (an HMxx
+ * write during the ripple skipped its stop value, see Cosmic Ark): it
+ * gets an extra clock every 4 colour clocks, which moves it 17 pixels left
+ * per line and changes its shape depending on its position modulo 4.
+ * [size][pos & 3] -> first pixel offset, width. Measured with gopher2600. */
+static const s8 lock_shape[4][4][2] = {
+    { { 0, 0 }, { -1, 2 }, { 0, 1 }, { 0, 1 } },     /* 1 pixel */
+    { { 0, 2 }, { -1, 3 }, { 0, 2 }, { 0, 1 } },     /* 2 pixels */
+    { { 0, 4 }, { -1, 5 }, { 0, 4 }, { 0, 4 } },     /* 4 pixels */
+    { { 0, 8 }, { -1, 9 }, { 0, 8 }, { 0, 8 } }      /* 8 pixels */
+};
 
 /* copy offsets for NUSIZ modes 0..7 */
 static const u8 nusiz_copies[8][3] = {
@@ -136,9 +256,12 @@ static void build_tables(void)
         for (copy = 0; copy <= 64; copy += 16) {
             if (!copy_at(mode, copy)) continue;
             for (i = 0; i < 8 * scale; i++) {
-                int d = (copy + delay + i) % TIA_WIDTH;
-                player_mask[mode][d] = (u8)(0x80 >> (i / scale));
-                player_mask[mode][d + TIA_WIDTH] = player_mask[mode][d];
+                int d = (copy + delay + i) % TIA_WIDTH, nm;
+                for (nm = 0; nm < 2; nm++) {
+                    if (nm && copy == 0) continue;
+                    player_mask[nm][mode][d] = (u8)(0x80 >> (i / scale));
+                    player_mask[nm][mode][d + TIA_WIDTH] = player_mask[nm][mode][d];
+                }
             }
             for (size = 0; size < 4; size++) {
                 int w = 1 << size;
@@ -209,7 +332,8 @@ static void build_tables(void)
         coll_table[obj] = c;
     }
     for (mode = 0; mode < 8; mode++) {
-        player_nruns[mode] = find_runs(player_mask[mode], player_runs[mode]);
+        player_nruns[0][mode] = find_runs(player_mask[0][mode], player_runs[0][mode]);
+        player_nruns[1][mode] = find_runs(player_mask[1][mode], player_runs[1][mode]);
         for (size = 0; size < 4; size++)
             missile_nruns[mode][size] = find_runs(missile_mask[mode][size], missile_runs[mode][size]);
     }
@@ -224,18 +348,54 @@ static void upd_p0(void)
 {
     u8 g = tia.vdelp0 ? tia.grp0_old : tia.grp0_new;
     tia.gp0 = tia.refp0 ? reverse_bits[g] : g;
-    tia.p0_mask = &player_mask[tia.nusiz0 & 7][TIA_WIDTH - tia.pos_p0];
-    tia.runs[0] = player_runs[tia.nusiz0 & 7];
-    tia.nruns[0] = player_nruns[tia.nusiz0 & 7];
+    tia.p0_mask = &player_mask[tia.p0_nomain][tia.nusiz0 & 7][TIA_WIDTH - tia.pos_p0];
+    tia.runs[0] = player_runs[tia.p0_nomain][tia.nusiz0 & 7];
+    tia.nruns[0] = player_nruns[tia.p0_nomain][tia.nusiz0 & 7];
 }
 
 static void upd_p1(void)
 {
     u8 g = tia.vdelp1 ? tia.grp1_old : tia.grp1_new;
     tia.gp1 = tia.refp1 ? reverse_bits[g] : g;
-    tia.p1_mask = &player_mask[tia.nusiz1 & 7][TIA_WIDTH - tia.pos_p1];
-    tia.runs[1] = player_runs[tia.nusiz1 & 7];
-    tia.nruns[1] = player_nruns[tia.nusiz1 & 7];
+    tia.p1_mask = &player_mask[tia.p1_nomain][tia.nusiz1 & 7][TIA_WIDTH - tia.pos_p1];
+    tia.runs[1] = player_runs[tia.p1_nomain][tia.nusiz1 & 7];
+    tia.nruns[1] = player_nruns[tia.p1_nomain][tia.nusiz1 & 7];
+}
+
+static int copy_at(int mode, int offset);
+
+/* build the mask of locked object i (0 = M0, 1 = M1, 2 = BL) */
+static void build_lock_mask(int i, int mode, int size, int pos)
+{
+    u8 *m = lock_mask[i];
+    int c, k, n, x;
+    memset(m, 0, 320);
+    for (c = 0; c <= 64; c += 16) {
+        int p, st, w;
+        if (!copy_at(mode, c)) continue;
+        p = (pos + c) % TIA_WIDTH;
+        st = lock_shape[size][p & 3][0];
+        w = lock_shape[size][p & 3][1];
+        for (k = 0; k < w; k++) {
+            int x = (p + st + k + TIA_WIDTH) % TIA_WIDTH;
+            m[x] = m[x + TIA_WIDTH] = 1;
+        }
+    }
+    /* runs relative to the object position */
+    n = 0;
+    x = 0;
+    while (x < TIA_WIDTH && n < LOCK_RUNS) {
+        if (m[x]) {
+            int st = x;
+            while (x < TIA_WIDTH && m[x]) x++;
+            lock_runs[i][n * 2] = (u8)((st - pos + TIA_WIDTH) % TIA_WIDTH);
+            lock_runs[i][n * 2 + 1] = (u8)(x - st);
+            n++;
+        } else {
+            x++;
+        }
+    }
+    tia.lock_nruns[i] = (u8)n;
 }
 
 static void upd_m0(void)
@@ -244,6 +404,12 @@ static void upd_m0(void)
     tia.m0_mask = &missile_mask[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3][TIA_WIDTH - tia.pos_m0];
     tia.runs[2] = missile_runs[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3];
     tia.nruns[2] = missile_nruns[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3];
+    if (tia.hm_lock[2]) {
+        build_lock_mask(0, tia.nusiz0 & 7, (tia.nusiz0 >> 4) & 3, tia.pos_m0);
+        tia.m0_mask = lock_mask[0];
+        tia.runs[2] = lock_runs[0];
+        tia.nruns[2] = tia.lock_nruns[0];
+    }
 }
 
 static void upd_m1(void)
@@ -252,6 +418,12 @@ static void upd_m1(void)
     tia.m1_mask = &missile_mask[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3][TIA_WIDTH - tia.pos_m1];
     tia.runs[3] = missile_runs[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3];
     tia.nruns[3] = missile_nruns[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3];
+    if (tia.hm_lock[3]) {
+        build_lock_mask(1, tia.nusiz1 & 7, (tia.nusiz1 >> 4) & 3, tia.pos_m1);
+        tia.m1_mask = lock_mask[1];
+        tia.runs[3] = lock_runs[1];
+        tia.nruns[3] = tia.lock_nruns[1];
+    }
 }
 
 static void upd_bl(void)
@@ -260,6 +432,12 @@ static void upd_bl(void)
     tia.bl_mask = &ball_mask[(tia.ctrlpf >> 4) & 3][TIA_WIDTH - tia.pos_bl];
     tia.runs[4] = ball_runs[(tia.ctrlpf >> 4) & 3];
     tia.nruns[4] = ball_nruns[(tia.ctrlpf >> 4) & 3];
+    if (tia.hm_lock[4]) {
+        build_lock_mask(2, 0, (tia.ctrlpf >> 4) & 3, tia.pos_bl);
+        tia.bl_mask = lock_mask[2];
+        tia.runs[4] = lock_runs[2];
+        tia.nruns[4] = tia.lock_nruns[2];
+    }
 }
 
 static void upd_pf(void)
@@ -592,10 +770,77 @@ static void end_frame(void)
     a26_stop = 1;
 }
 
+static void apply_hmove(void)
+{
+#define MOVE(pos, d) pos = (u8)(((int)(pos) + (d) + TIA_WIDTH) % TIA_WIDTH)
+    MOVE(tia.pos_p0, tia.hm_disp[0]);
+    MOVE(tia.pos_p1, tia.hm_disp[1]);
+    MOVE(tia.pos_m0, tia.hm_disp[2]);
+    MOVE(tia.pos_m1, tia.hm_disp[3]);
+    MOVE(tia.pos_bl, tia.hm_disp[4]);
+#undef MOVE
+    tia.hm_pending = 0;
+    upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
+}
+
+/* locked objects move 17 pixels left per line (measured with gopher2600) */
+static void move_locked(void)
+{
+    u8 *pos[5];
+    int i;
+    pos[0] = &tia.pos_p0; pos[1] = &tia.pos_p1; pos[2] = &tia.pos_m0;
+    pos[3] = &tia.pos_m1; pos[4] = &tia.pos_bl;
+    for (i = 0; i < 5; i++) {
+        if (!tia.hm_lock[i]) continue;
+        *pos[i] = (u8)((*pos[i] + TIA_WIDTH - 17) % TIA_WIDTH);
+    }
+    upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
+}
+
+/* HMxx write while the HMOVE ripple may still run: an object that has not
+ * reached its stop tick continues to the new value, or locks if the new
+ * value's tick has already passed. A locked object stops on a value of 8
+ * (count 0). */
+static void hm_changed(int i, u8 hm, u32 cc)
+{
+    s32 tw = (s32)(cc - tia.hm_line_cc) - 2;    /* takes effect 2 clocks later */
+    int t0, k_done, v_new = (hm >> 4) ^ 8;
+    int d;
+    u8 *pos[5];
+
+    if (tia.hm_lock[i]) {
+        if (v_new == 0) { tia.hm_lock[i] = 0; goto update; }
+        return;
+    }
+    if (tia.hm_w > 20) return;          /* only early HMOVEs are modelled here */
+    t0 = hmove_t0(tia.hm_w);
+    if (tw < t0 || tw > t0 + 64) return;  /* ripple not running */
+    k_done = (int)((tw - t0 + 3) / 4);  /* ticks before tw */
+    if (tia.hm_v[i] < k_done) return;   /* already stopped */
+    if (v_new >= k_done) {
+        d = hmove_calc(tia.hm_w, v_new);
+    } else {
+        d = hmove_calc(tia.hm_w, 16);
+        tia.hm_lock[i] = 1;
+    }
+    tia.hm_v[i] = (u8)v_new;
+    pos[0] = &tia.pos_p0; pos[1] = &tia.pos_p1; pos[2] = &tia.pos_m0;
+    pos[3] = &tia.pos_m1; pos[4] = &tia.pos_bl;
+    *pos[i] = (u8)((*pos[i] + d - tia.hm_disp[i] + 2 * TIA_WIDTH) % TIA_WIDTH);
+    tia.hm_disp[i] = (s8)d;
+update:
+    upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
+}
+
 static void end_line(void)
 {
     audio_line();
     tia.hmove_blank = 0;
+    if (tia.hm_pending) apply_hmove();
+    if (tia.hm_lock[0] | tia.hm_lock[1] | tia.hm_lock[2] | tia.hm_lock[3] | tia.hm_lock[4])
+        move_locked();
+    if (tia.p0_nomain) { tia.p0_nomain = 0; upd_p0(); }
+    if (tia.p1_nomain) { tia.p1_nomain = 0; upd_p1(); }
     tia.line_start_cc += TIA_LINE_CC;
     tia.line++;
     if (tia.line >= TIA_MAX_LINES)
@@ -675,7 +920,9 @@ u8 tia_read(u16 addr)
         }
     } else if (r < 14) {
         int p = r - 12;
-        int pressed = tia.fire[p];
+        int pressed;
+        if (a26_input_hook) a26_input_hook();
+        pressed = tia.fire[p];
         if (tia.vblank & 0x40) {
             if (pressed) tia.fire_latch[p] = 1;
             pressed = tia.fire_latch[p];
@@ -714,6 +961,11 @@ static int write_class(u8 r, u8 val)
     return 0;
 }
 
+/* an HMxx write matters if the ripple of this line's HMOVE may still run
+ * or an object is locked */
+#define HM_LOCKED() (tia.hm_lock[0] | tia.hm_lock[1] | tia.hm_lock[2] | tia.hm_lock[3] | tia.hm_lock[4])
+#define HM_WATCH(cc) ((u32)((cc) - tia.hm_line_cc) < 140u || HM_LOCKED())
+
 void tia_write(u16 addr, u8 val)
 {
     u32 cc = a26_cycles * 3u;
@@ -721,9 +973,17 @@ void tia_write(u16 addr, u8 val)
     u32 delay = 0;
     int wc = write_class(r, val);
 
+#ifdef A26_TRACE
+    if (tia_trace)
+        printf("TIA f%lu l%3d cyc%3lu px%4ld  %02X <- %02X\n", (unsigned long)tia.frame_count,
+               tia.line + (int)((cc - tia.line_start_cc) / TIA_LINE_CC),
+               (unsigned long)((cc - tia.line_start_cc) % TIA_LINE_CC / 3),
+               (long)((cc - tia.line_start_cc) % TIA_LINE_CC) - 68, r, val);
+#endif
 #ifdef A26_TIA_REFERENCE
     if (tia_use_reference) wc = 0;
 #endif
+    if (wc == 1 && HM_WATCH(cc)) wc = 0;   /* may move objects now: catch up first */
     if (wc == 2) return;
     if (wc == 1) goto apply;
 
@@ -731,6 +991,8 @@ void tia_write(u16 addr, u8 val)
     case 0x01: delay = 1; break;                   /* VBLANK */
     case 0x04: case 0x05: delay = 8; break;        /* NUSIZx */
     case 0x0B: case 0x0C: delay = 1; break;        /* REFPx */
+    case 0x1B: case 0x1C: delay = 1; break;        /* GRPx */
+    case 0x1D: case 0x1E: case 0x1F: delay = 1; break; /* ENAMx, ENABL */
     case 0x0D: case 0x0E: case 0x0F: {             /* PFx: sampled every 4 pixels */
         static const u8 d[4] = { 4, 5, 2, 3 };
         u32 x = hpos_of(cc);
@@ -784,8 +1046,10 @@ apply:
         else
             newx = (int)((hpos - TIA_HBLANK + obj_delay) % TIA_WIDTH);
         switch (r) {
-        case 0x10: tia.pos_p0 = (u8)newx; upd_p0(); break;
-        case 0x11: tia.pos_p1 = (u8)newx; upd_p1(); break;
+        /* the main copy of a player starts when its counter wraps, so
+         * after a reset it only appears from the next line on */
+        case 0x10: tia.pos_p0 = (u8)newx; tia.p0_nomain = 1; upd_p0(); break;
+        case 0x11: tia.pos_p1 = (u8)newx; tia.p1_nomain = 1; upd_p1(); break;
         case 0x12: tia.pos_m0 = (u8)newx; upd_m0(); break;
         case 0x13: tia.pos_m1 = (u8)newx; upd_m1(); break;
         case 0x14: tia.pos_bl = (u8)newx; upd_bl(); break;
@@ -812,11 +1076,11 @@ apply:
     case 0x1D: tia.enam0 = (val & 0x02) != 0; upd_m0(); break;
     case 0x1E: tia.enam1 = (val & 0x02) != 0; upd_m1(); break;
     case 0x1F: tia.enabl_new = (val & 0x02) != 0; upd_bl(); break;
-    case 0x20: tia.hmp0 = val & 0xF0; break;
-    case 0x21: tia.hmp1 = val & 0xF0; break;
-    case 0x22: tia.hmm0 = val & 0xF0; break;
-    case 0x23: tia.hmm1 = val & 0xF0; break;
-    case 0x24: tia.hmbl = val & 0xF0; break;
+    case 0x20: tia.hmp0 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(0, tia.hmp0, cc); break;
+    case 0x21: tia.hmp1 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(1, tia.hmp1, cc); break;
+    case 0x22: tia.hmm0 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(2, tia.hmm0, cc); break;
+    case 0x23: tia.hmm1 = val & 0xF0; if (HM_WATCH(cc)) hm_changed(3, tia.hmm1, cc); break;
+    case 0x24: tia.hmbl = val & 0xF0; if (HM_WATCH(cc)) hm_changed(4, tia.hmbl, cc); break;
     case 0x25: tia.vdelp0 = val & 0x01; upd_p0(); break;
     case 0x26: tia.vdelp1 = val & 0x01; upd_p1(); break;
     case 0x27: tia.vdelbl = val & 0x01; upd_bl(); break;
@@ -835,21 +1099,39 @@ apply:
         break;
     }
     case 0x2A: { /* HMOVE */
-        u32 hpos = hpos_of(cc);
-#define MOVE(pos, hm) pos = (u8)(((int)(pos) - ((s8)(hm) >> 4) + TIA_WIDTH) % TIA_WIDTH)
-        MOVE(tia.pos_p0, tia.hmp0);
-        MOVE(tia.pos_p1, tia.hmp1);
-        MOVE(tia.pos_m0, tia.hmm0);
-        MOVE(tia.pos_m1, tia.hmm1);
-        MOVE(tia.pos_bl, tia.hmbl);
-#undef MOVE
-        if (hpos < TIA_HBLANK)
+        /* The effect depends on the cycle of the write (hmove_disp): early
+         * in the line the objects move in the (extended) horizontal blank,
+         * in the middle nothing happens, and late in the line the extra
+         * clocks land in the next line's blank. */
+        u32 w = hpos_of(cc) / 3;
+        if (w > 75) w = 75;
+        tia.hm_w = (u8)w;
+        tia.hm_line_cc = cc - hpos_of(cc);
+        tia.hm_v[0] = (u8)((tia.hmp0 >> 4) ^ 8);
+        tia.hm_v[1] = (u8)((tia.hmp1 >> 4) ^ 8);
+        tia.hm_v[2] = (u8)((tia.hmm0 >> 4) ^ 8);
+        tia.hm_v[3] = (u8)((tia.hmm1 >> 4) ^ 8);
+        tia.hm_v[4] = (u8)((tia.hmbl >> 4) ^ 8);
+        tia.hm_lock[0] = tia.hm_lock[1] = tia.hm_lock[2] = tia.hm_lock[3] = tia.hm_lock[4] = 0;
+        tia.hm_disp[0] = hmove_disp[tia.hmp0 >> 4][w];
+        tia.hm_disp[1] = hmove_disp[tia.hmp1 >> 4][w];
+        tia.hm_disp[2] = hmove_disp[tia.hmm0 >> 4][w];
+        tia.hm_disp[3] = hmove_disp[tia.hmm1 >> 4][w];
+        tia.hm_disp[4] = hmove_disp[tia.hmbl >> 4][w];
+        if (w <= 20)
             tia.hmove_blank = 1;
-        upd_p0(); upd_p1(); upd_m0(); upd_m1(); upd_bl();
+        if (w < 54)
+            apply_hmove();
+        else
+            tia.hm_pending = 1;         /* applied at the end of the line */
         break;
     }
     case 0x2B: /* HMCLR */
         tia.hmp0 = tia.hmp1 = tia.hmm0 = tia.hmm1 = tia.hmbl = 0;
+        if (HM_WATCH(cc)) {
+            int i;
+            for (i = 0; i < 5; i++) hm_changed(i, 0, cc);
+        }
         break;
     case 0x2C: /* CXCLR */
         tia.coll = 0;

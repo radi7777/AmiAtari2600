@@ -34,7 +34,8 @@ typedef struct {
 extern HwInfo hwinfo;
 
 int  hw_init(void);             /* open graphics.library, detect chipset */
-void hw_takeover(void);         /* stop the OS display, DMA and interrupts */
+/* take the display; kill_os = also stop OS interrupts and DMA (see hw.c) */
+void hw_takeover(int kill_os);
 void hw_restore(void);          /* give everything back to the OS */
 void hw_cleanup(void);          /* close libraries */
 
@@ -42,6 +43,8 @@ void hw_cleanup(void);          /* close libraries */
 int  hw_set_pal(int pal);
 
 void hw_wait_vbl(void);         /* wait for the next vertical blank */
+void hw_wait_line(int line);
+extern int hw_no_timer;         /* diagnostics: never sleep in timer.device */    /* wait until the beam reaches line (this frame) */
 int  hw_vbl_pending(void);      /* vertical blank happened since last clear */
 void hw_clear_vbl(void);
 void hw_wait_lines(int n);      /* busy-wait n raster lines (~64 us each) */

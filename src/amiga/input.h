@@ -28,7 +28,8 @@
 #define KEY_RALT    0x65
 #define KEY_P       0x19
 
-void input_init(void);
+void input_init(int kill_os);   /* kill_os: poll the CIA, else input.device handler */
+void input_cleanup(void);
 void input_poll(void);          /* read keyboard; call once per frame */
 int  key_down(int code);
 int  key_pressed(int code);     /* went down since the last poll */

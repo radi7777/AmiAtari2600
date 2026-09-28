@@ -89,20 +89,24 @@ void audio_frame(void)
     if (!running) return;
     for (ch = 0; ch < 2; ch++) {
         int n = a26_audio(ch, &src);
-        BYTE *dst = BUF(cur, ch);
+        /* chip RAM writes are slow on accelerated machines: build the
+         * buffer in fast RAM and copy it with longword writes */
+        u32 tmp[BUF_MAX / 4];
+        BYTE *t = (BYTE *)tmp;
+        u32 *dst = (u32 *)BUF(cur, ch);
         int i;
         if (n <= 0) {
-            for (i = 0; i < buf_len; i++) dst[i] = 0;
-            continue;
-        }
-        if (n == buf_len) {
-            for (i = 0; i < buf_len; i++) dst[i] = level[src[i]];
+            for (i = 0; i < buf_len; i++) t[i] = 0;
+        } else if (n == buf_len) {
+            for (i = 0; i < buf_len; i++) t[i] = level[src[i]];
         } else {
             /* 16.16 fixed point stretch */
             u32 step = ((u32)n << 16) / (u32)buf_len, pos = 0;
             for (i = 0; i < buf_len; i++, pos += step)
-                dst[i] = level[src[pos >> 16]];
+                t[i] = level[src[pos >> 16]];
         }
+        for (i = 0; i < (buf_len + 3) / 4; i++)
+            dst[i] = tmp[i];
     }
     set_channels(cur);          /* latched when the playing buffer ends */
     cur ^= 1;

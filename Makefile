@@ -78,3 +78,7 @@ m68k-profile: m68k-build
 
 clean:
 	rm -rf $(BUILD)
+
+# host harness that prints every TIA write of one frame (-trace N)
+$(BUILD)/a26trace: $(CORE_SRC) $(HOST_SRC) src/core/*.h | $(BUILD)
+	$(CC) $(CFLAGS) -DA26_TRACE -o $@ $(CORE_SRC) $(HOST_SRC)

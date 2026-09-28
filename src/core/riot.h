@@ -24,9 +24,14 @@ typedef struct {
     u32 timer_set_cycle;
     s32 timer_start;    /* (value << shift) at the time of writing */
     u8  timer_shift;    /* 0, 3, 6, 10 for 1, 8, 64, 1024 */
+    u8  timint_cleared; /* flag read away since the timer expired */
+    u8  pa7_flag;       /* PA7 edge detect flag (TIMINT bit 6) */
 } Riot;
 
 extern Riot riot;
+/* 1 = power on with cleared RAM and INTIM = 0 (reproducible comparisons
+ * with other emulators); 0 = fixed pseudo-random pattern */
+extern int riot_clean_start;
 
 void riot_reset(void);
 u8   riot_read(u16 addr);

@@ -85,6 +85,14 @@ typedef struct {
     const u8 *prio;         /* 64-entry object->colour index table */
     u8  col_l[5], col_r[5]; /* colour per index for left/right half */
     u8  hmove_blank;
+    u8  p0_nomain, p1_nomain;   /* reset this line: main copy not drawn yet */
+    s8  hm_disp[5];             /* HMOVE displacement P0, P1, M0, M1, BL */
+    u8  hm_pending;             /* late HMOVE: apply at the end of the line */
+    u8  hm_w;                   /* CPU cycle of the last HMOVE in its line */
+    u32 hm_line_cc;             /* start of that line */
+    u8  hm_v[5];                /* extra clocks each object is due */
+    u8  hm_lock[5];             /* locked in HMOVE (see hm_changed) */
+    u8  lock_nruns[3];
 
     u16 coll;               /* collision latches */
 
