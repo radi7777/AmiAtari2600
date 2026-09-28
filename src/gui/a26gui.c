@@ -855,8 +855,10 @@ static void vi_remove(void)
 }
 
 /* ---------------------------------------------------------------------
- * screen: RTG Workbench -> window there; native -> own screen with more
- * colours (same mode as the Workbench, as many planes as it allows)
+ * screen: checked at the start. RTG Workbench -> window there; PAL/NTSC
+ * (chipset) Workbench -> always an own screen in the Workbench's mode with
+ * as many planes as the mode allows (Workbench often has only 4 or 8
+ * colours; OCS/ECS hires: 16, AGA: 256)
  */
 static int force_native;        /* NATIVE: own chipset screen even with RTG */
 
@@ -879,11 +881,8 @@ static struct Screen *open_screen(void)
         depth = 5;
         if (GetDisplayInfoData(NULL, (UBYTE *)&dims, sizeof(dims), DTAG_DIMS, modeid))
             depth = dims.MaxDepth > 8 ? 8 : dims.MaxDepth;
-        if (depth > wb->RastPort.BitMap->Depth || force_native) {
+        {
             static UWORD pens[] = { (UWORD)~0 };
-            /* static: the tags are read again later (GetTagData from
-             * gadtools while a window opens); a list on the stack is
-             * garbage by then and the search ran off through memory */
             static struct TagItem t[8];
             t[0].ti_Tag = force_native ? TAG_IGNORE : SA_LikeWorkbench; t[0].ti_Data = TRUE;
             t[1].ti_Tag = SA_DisplayID;     t[1].ti_Data = modeid;
