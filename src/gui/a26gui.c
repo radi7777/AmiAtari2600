@@ -148,15 +148,28 @@ struct ImgData {
     LONG rx, ry;                /* pixel aspect of the screen (display ticks) */
     int setup;
     int shown;                  /* between MUIM_Show and MUIM_Hide */
+    /* screens with a colour table: our own remapping (see img_scale) */
+    int clut;
+    struct ColorMap *cm;
+    struct BitMap *scrbm;
+    int npens;
+    LONG pen[64];
+    ULONG rgb[64];
     char file[256];
 };
 
 static struct MUI_CustomClass *img_class;
 
-static void img_free(struct ImgData *d)
+static void img_free_scaled(struct ImgData *d)
 {
     if (d->sbm) { WaitBlit(); FreeBitMap(d->sbm); }
     d->sbm = NULL;
+    while (d->npens > 0) ReleasePen(d->cm, d->pen[--d->npens]);
+}
+
+static void img_free(struct ImgData *d)
+{
+    img_free_scaled(d);
     if (d->dto) DisposeDTObject(d->dto);
     d->dto = NULL;
     d->bm = NULL;
@@ -202,13 +215,64 @@ static void img_bounds(struct ImgData *d)
     }
 }
 
+/* pen for an RGB colour of the picture (cached; up to 64 colours) */
+static LONG img_pen(struct ImgData *d, ULONG rgb)
+{
+    static struct TagItem obp[] = { { OBP_Precision, PRECISION_IMAGE }, { TAG_DONE, 0 } };
+    int i;
+    for (i = 0; i < d->npens; i++)
+        if (d->rgb[i] == rgb) return d->pen[i];
+    if (d->npens == 64) return d->pen[0];
+    d->rgb[d->npens] = rgb;
+    d->pen[d->npens] = ObtainBestPenA(d->cm, ((rgb >> 16) & 255) * 0x01010101UL,
+                                      ((rgb >> 8) & 255) * 0x01010101UL,
+                                      (rgb & 255) * 0x01010101UL, obp);
+    return d->pen[d->npens++];
+}
+
+/* colour table screens: scale and map every colour to the nearest pen
+ * ourselves, as picture.datatype dithers the few colours into noise */
+static void img_scale_clut(struct ImgData *d, LONG dw, LONG dh)
+{
+    UBYTE *row, *buf;
+    struct RastPort rp;
+    LONG x, y, sy, prev = -1;
+    d->sbm = AllocBitMap(dw, dh, GetBitMapAttr(d->scrbm, BMA_DEPTH), BMF_CLEAR, d->scrbm);
+    row = (UBYTE *)AllocVec(d->cw * 3, MEMF_ANY);
+    buf = (UBYTE *)AllocVec(dw * dh, MEMF_ANY);
+    if (d->sbm && row && buf) {
+        for (y = 0; y < dh; y++) {
+            sy = d->cy + y * d->ch / dh;
+            if (sy != prev) {
+                DoMethod(d->dto, PDTM_READPIXELARRAY, (ULONG)row, PBPAFMT_RGB,
+                         d->cw * 3, d->cx, sy, d->cw, 1);
+                prev = sy;
+            }
+            for (x = 0; x < dw; x++) {
+                const UBYTE *p = row + (x * d->cw / dw) * 3;
+                buf[y * dw + x] = (UBYTE)img_pen(d, ((ULONG)p[0] << 16) | ((ULONG)p[1] << 8) | p[2]);
+            }
+        }
+        InitRastPort(&rp);
+        rp.BitMap = d->sbm;
+        WriteChunkyPixels(&rp, 0, 0, dw - 1, dh - 1, buf, dw);
+        d->sw = dw;
+        d->sh = dh;
+    } else if (d->sbm) {
+        FreeBitMap(d->sbm);
+        d->sbm = NULL;
+    }
+    if (row) FreeVec(row);
+    if (buf) FreeVec(buf);
+}
+
 /* content scaled to fit aw x ah */
 static void img_scale(struct ImgData *d, LONG aw, LONG ah)
 {
     struct BitScaleArgs bsa;
     LONG dw, dh;
     if (d->sbm && d->aw == aw && d->ah == ah) return;
-    if (d->sbm) { WaitBlit(); FreeBitMap(d->sbm); d->sbm = NULL; }
+    img_free_scaled(d);
     d->aw = aw; d->ah = ah;
     /* the snaps have square pixels; the screen's may not be (hires PAL:
      * twice as high as wide) */
@@ -219,6 +283,10 @@ static void img_scale(struct ImgData *d, LONG aw, LONG ah)
         dh = d->ch * aw * d->rx / (d->cw * d->ry);
     }
     if (dw < 1 || dh < 1) return;
+    if (d->clut) {
+        img_scale_clut(d, dw, dh);
+        return;
+    }
     d->sbm = AllocBitMap(dw, dh, GetBitMapAttr(d->bm, BMA_DEPTH), BMF_CLEAR, d->bm);
     if (!d->sbm) return;
     memset(&bsa, 0, sizeof(bsa));
@@ -242,14 +310,12 @@ static void img_load(Object *obj, struct ImgData *d)
     img_free(d);
     if (!d->setup || !d->file[0]) return;
     tags[0].ti_Tag = DTA_GroupID;       tags[0].ti_Data = GID_PICTURE;
-    tags[1].ti_Tag = PDTA_Remap;        tags[1].ti_Data = TRUE;
+    tags[1].ti_Tag = PDTA_Remap;        tags[1].ti_Data = !d->clut;
     tags[2].ti_Tag = PDTA_Screen;       tags[2].ti_Data = (ULONG)_screen(obj);
     tags[3].ti_Tag = PDTA_DestMode;     tags[3].ti_Data = PMODE_V43;
     tags[4].ti_Tag = PDTA_UseFriendBitMap; tags[4].ti_Data = TRUE;
     tags[5].ti_Tag = OBP_Precision;     tags[5].ti_Data = PRECISION_IMAGE;
-    /* dithering turns the few colours of a chipset screen into noise */
-    tags[6].ti_Tag = PDTA_DitherQuality; tags[6].ti_Data = 0;
-    tags[7].ti_Tag = TAG_DONE;
+    tags[6].ti_Tag = TAG_DONE;
     trace("image: load %s", d->file);
     d->dto = NewDTObjectA((APTR)d->file, tags);
     trace("image: object %s", d->dto ? "ok" : "failed");
@@ -263,6 +329,7 @@ static void img_load(Object *obj, struct ImgData *d)
         GetDTAttrsA(d->dto, gt);
         if (bmh) { d->w = bmh->bmh_Width; d->h = bmh->bmh_Height; }
         else d->bm = NULL;
+        if (d->clut) d->bm = bmh ? d->scrbm : NULL;     /* only a marker */
     }
     trace("image: bitmap %s", d->bm ? "ok" : "none");
     if (!d->bm) { img_free(d); return; }
@@ -325,7 +392,10 @@ static __saveds ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Ob
         d = INST_DATA(cl, obj);
         d->setup = 1;
         trace("image: pens", NULL);
-        d->black = ObtainBestPenA(_screen(obj)->ViewPort.ColorMap, 0, 0, 0, NULL);
+        d->cm = _screen(obj)->ViewPort.ColorMap;
+        d->scrbm = _screen(obj)->RastPort.BitMap;
+        d->clut = GetBitMapAttr(d->scrbm, BMA_DEPTH) <= 8;
+        d->black = ObtainBestPenA(d->cm, 0, 0, 0, NULL);
         {
             struct DisplayInfo di;
             ULONG mode = GetVPModeID(&_screen(obj)->ViewPort);
