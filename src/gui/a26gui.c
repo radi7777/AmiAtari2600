@@ -136,6 +136,7 @@ struct ImgData {
     LONG cx, cy, cw, ch;        /* content without border */
     struct BitMap *sbm;         /* scaled content */
     LONG sw, sh, aw, ah;        /* its size, for an area of aw x ah */
+    LONG black;                 /* pen for the area background, -1 if none */
     int setup;
     char file[256];
 };
@@ -273,6 +274,7 @@ static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj
         if (obj) {
             d = INST_DATA(cl, obj);
             memset(d, 0, sizeof(*d));
+            d->black = -1;
             img_set(obj, d, ((struct opSet *)msg)->ops_AttrList);
         }
         return (ULONG)obj;
@@ -288,11 +290,14 @@ static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj
         if (!DoSuperMethodA(cl, obj, msg)) return FALSE;
         d = INST_DATA(cl, obj);
         d->setup = 1;
+        d->black = ObtainBestPenA(_screen(obj)->ViewPort.ColorMap, 0, 0, 0, NULL);
         img_load(obj, d);
         return TRUE;
     case MUIM_Cleanup:
         d = INST_DATA(cl, obj);
         img_free(d);
+        if (d->black >= 0) ReleasePen(_screen(obj)->ViewPort.ColorMap, d->black);
+        d->black = -1;
         d->setup = 0;
         break;
     case MUIM_AskMinMax: {
@@ -308,7 +313,7 @@ static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj
         d = INST_DATA(cl, obj);
         if ((((struct MUIP_Draw *)msg)->flags & MADF_DRAWOBJECT)) {
             LONG x = _mleft(obj), y = _mtop(obj), w = _mwidth(obj), h = _mheight(obj);
-            SetAPen(_rp(obj), _dri(obj)->dri_Pens[BACKGROUNDPEN]);
+            SetAPen(_rp(obj), d->black >= 0 ? d->black : _dri(obj)->dri_Pens[BACKGROUNDPEN]);
             RectFill(_rp(obj), x, y, x + w - 1, y + h - 1);
             if (d->bm) img_scale(d, w, h);
             if (d->sbm) {
