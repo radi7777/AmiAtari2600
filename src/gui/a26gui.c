@@ -23,6 +23,7 @@
 #include <intuition/screens.h>
 #include <graphics/gfx.h>
 #include <graphics/displayinfo.h>
+#include <graphics/scale.h>
 #include <datatypes/datatypes.h>
 #include <datatypes/pictureclass.h>
 #include <libraries/asl.h>
@@ -121,7 +122,10 @@ enum { ID_SELECT = 1, ID_START, ID_FILTER, ID_SWITCH, ID_ROMDIR, ID_DB, ID_SNAPS
 
 /* ---------------------------------------------------------------------
  * screenshot area: a small custom class drawing a datatype picture
- * (remapped to the screen) centred in a 320 x 240 area
+ * (remapped to the screen) in a 320 x 240 area. The libretro snaps come in
+ * different sizes (320 x 210..250, 512 x 384) with uneven borders, so the
+ * border (the colour of the top left pixel) is cut off and the rest is
+ * scaled to fit, keeping its aspect, and centred.
  */
 #define MUIA_A26Img_File (TAG_USER | 0x26000001)
 
@@ -129,6 +133,9 @@ struct ImgData {
     Object *dto;
     struct BitMap *bm;
     LONG w, h;
+    LONG cx, cy, cw, ch;        /* content without border */
+    struct BitMap *sbm;         /* scaled content */
+    LONG sw, sh, aw, ah;        /* its size, for an area of aw x ah */
     int setup;
     char file[256];
 };
@@ -137,9 +144,79 @@ static struct MUI_CustomClass *img_class;
 
 static void img_free(struct ImgData *d)
 {
+    if (d->sbm) { WaitBlit(); FreeBitMap(d->sbm); }
+    d->sbm = NULL;
     if (d->dto) DisposeDTObject(d->dto);
     d->dto = NULL;
     d->bm = NULL;
+}
+
+/* is the pixel (r,g,b) different from the border colour? */
+static int differs(const UBYTE *p, const UBYTE *b)
+{
+    int dr = p[0] - b[0], dg = p[1] - b[1], db = p[2] - b[2];
+    return dr * dr + dg * dg + db * db > 3 * 24 * 24;
+}
+
+/* bounding box of everything that is not border; whole picture if the
+ * datatype cannot deliver RGB pixels */
+static void img_bounds(struct ImgData *d)
+{
+    UBYTE *row, border[3];
+    LONG x, y, x0 = d->w, x1 = -1, y0 = d->h, y1 = -1;
+    d->cx = d->cy = 0; d->cw = d->w; d->ch = d->h;
+    if (d->w <= 0 || d->h <= 0) return;
+    row = (UBYTE *)AllocVec(d->w * 3, MEMF_ANY);
+    if (!row) return;
+    for (y = 0; y < d->h; y++) {
+        if (!DoMethod(d->dto, PDTM_READPIXELARRAY, (ULONG)row, PBPAFMT_RGB,
+                      d->w * 3, 0, y, d->w, 1))
+            break;
+        if (y == 0) { border[0] = row[0]; border[1] = row[1]; border[2] = row[2]; }
+        for (x = 0; x < d->w; x++)
+            if (differs(row + x * 3, border)) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                y1 = y;
+            }
+    }
+    FreeVec(row);
+    if (y < d->h || x1 < x0) return;     /* no pixels or all border */
+    d->cx = x0; d->cy = y0; d->cw = x1 - x0 + 1; d->ch = y1 - y0 + 1;
+    {
+        char t[48];
+        sprintf(t, "%ld,%ld %ldx%ld", d->cx, d->cy, d->cw, d->ch);
+        trace("image: content %s", t);
+    }
+}
+
+/* content scaled to fit aw x ah */
+static void img_scale(struct ImgData *d, LONG aw, LONG ah)
+{
+    struct BitScaleArgs bsa;
+    LONG dw, dh;
+    if (d->sbm && d->aw == aw && d->ah == ah) return;
+    if (d->sbm) { WaitBlit(); FreeBitMap(d->sbm); d->sbm = NULL; }
+    d->aw = aw; d->ah = ah;
+    if (d->cw * ah <= d->ch * aw) { dh = ah; dw = d->cw * ah / d->ch; }
+    else { dw = aw; dh = d->ch * aw / d->cw; }
+    if (dw < 1 || dh < 1) return;
+    d->sbm = AllocBitMap(dw, dh, GetBitMapAttr(d->bm, BMA_DEPTH), BMF_CLEAR, d->bm);
+    if (!d->sbm) return;
+    memset(&bsa, 0, sizeof(bsa));
+    bsa.bsa_SrcX = d->cx;        bsa.bsa_SrcY = d->cy;
+    bsa.bsa_SrcWidth = d->cw;    bsa.bsa_SrcHeight = d->ch;
+    bsa.bsa_XSrcFactor = d->cw;  bsa.bsa_YSrcFactor = d->ch;
+    bsa.bsa_XDestFactor = dw;    bsa.bsa_YDestFactor = dh;
+    bsa.bsa_SrcBitMap = d->bm;   bsa.bsa_DestBitMap = d->sbm;
+    BitMapScale(&bsa);
+    d->sw = bsa.bsa_DestWidth;   d->sh = bsa.bsa_DestHeight;
+    {
+        char t[24];
+        sprintf(t, "%ldx%ld", d->sw, d->sh);
+        trace("image: scaled %s", t);
+    }
 }
 
 static void img_load(Object *obj, struct ImgData *d)
@@ -169,7 +246,8 @@ static void img_load(Object *obj, struct ImgData *d)
         else d->bm = NULL;
     }
     trace("image: bitmap %s", d->bm ? "ok" : "none");
-    if (!d->bm) img_free(d);
+    if (!d->bm) { img_free(d); return; }
+    img_bounds(d);
 }
 
 static void img_set(Object *obj, struct ImgData *d, struct TagItem *tags)
@@ -232,10 +310,10 @@ static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj
             LONG x = _mleft(obj), y = _mtop(obj), w = _mwidth(obj), h = _mheight(obj);
             SetAPen(_rp(obj), _dri(obj)->dri_Pens[BACKGROUNDPEN]);
             RectFill(_rp(obj), x, y, x + w - 1, y + h - 1);
-            if (d->bm) {
-                LONG bw = d->w < w ? d->w : w, bh = d->h < h ? d->h : h;
-                trace("image: draw", NULL);
-                BltBitMapRastPort(d->bm, 0, 0, _rp(obj), x + (w - bw) / 2, y + (h - bh) / 2,
+            if (d->bm) img_scale(d, w, h);
+            if (d->sbm) {
+                LONG bw = d->sw < w ? d->sw : w, bh = d->sh < h ? d->sh : h;
+                BltBitMapRastPort(d->sbm, 0, 0, _rp(obj), x + (w - bw) / 2, y + (h - bh) / 2,
                                   bw, bh, 0xC0);
             }
         }
