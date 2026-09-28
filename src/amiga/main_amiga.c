@@ -124,10 +124,9 @@ static void pc_report(void)
 }
 
 static int vstart = -1, vstart_pending = -1, vstart_count;
-/* recent looks at the picture's extent, see choose_vstart() */
-#define CONTENT_LOOKS 16
-static s16 content_first[CONTENT_LOOKS], content_last[CONTENT_LOOKS];
-static int content_n, content_i, content_frame;
+/* the picture's extent, see choose_vstart() */
+static int ext_lo = -1, ext_hi, lo_votes, hi_votes, lo_cand, hi_cand;
+static int centred_size = -1, content_frame;
 
 
 static int streq_nocase(const char *a, const char *b)
@@ -230,7 +229,8 @@ static void apply_mode(void)
     video_set_mode(display_pal, colours);
     if (!opt.nosound) audio_start(display_pal);
     vstart = -1;
-    content_n = content_i = 0;
+    ext_lo = centred_size = -1;
+    lo_votes = hi_votes = content_frame = 0;
 }
 
 /* choose the first TIA line shown, centring the game's picture.
@@ -238,10 +238,14 @@ static void apply_mode(void)
  * little for some games (Battlezone never blanks, Enduro unblanks from
  * line 8, many leave 20-30 black lines at the bottom). Every 4th frame
  * the first and last non-black line are looked up (the search stops at
- * the first non-black pixel, so it is cheap); the union of the last 16
- * looks (about a second) is centred. Changes are only taken over when
- * stable for 30 frames, so the picture does not jump. */
-
+ * the first non-black pixel, so it is cheap).
+ * The picture must not wander while playing (Atlantis, Pharaoh's Curse:
+ * things come and go at the top and bottom), so the extent only grows,
+ * by what was seen 3 times, and the first second after a (re)start and
+ * frames of odd length are not looked at. The first extent is centred at
+ * once; after that the display moves only when the picture would be cut
+ * or has grown by 16 lines or more (title -> game), and only when that
+ * holds for 30 frames. */
 static int line_blank(const u8 *fb, int y)
 {
     const u32 *l = (const u32 *)(const void *)(fb + y * TIA_WIDTH);
@@ -255,35 +259,50 @@ static void look_at_content(void)
 {
     const u8 *fb = a26_framebuffer();
     int lo = tia.first_visible, hi = tia.last_visible;
+    int nominal = (a26.region == REGION_PAL) ? 312 : 262;
+    if (content_frame < 60 || tia.frame_lines < nominal - 10 || tia.frame_lines > nominal + 10)
+        return;
     if (hi >= tia.frame_lines) hi = tia.frame_lines - 1;
     if (hi >= TIA_FB_LINES) hi = TIA_FB_LINES - 1;
     if (lo < 0) lo = 0;
     while (lo <= hi && line_blank(fb, lo)) lo++;
     if (lo > hi) return;                        /* all black: no news */
     while (line_blank(fb, hi)) hi--;
-    content_first[content_i] = (s16)lo;
-    content_last[content_i] = (s16)hi;
-    content_i = (content_i + 1) % CONTENT_LOOKS;
-    if (content_n < CONTENT_LOOKS) content_n++;
+    if (ext_lo < 0) {
+        ext_lo = lo;
+        ext_hi = hi;
+        return;
+    }
+    if (lo < ext_lo) {                          /* the least of 3 extensions */
+        lo_cand = lo_votes ? (lo > lo_cand ? lo : lo_cand) : lo;
+        if (++lo_votes >= 3) { ext_lo = lo_cand; lo_votes = 0; }
+    }
+    if (hi > ext_hi) {
+        hi_cand = hi_votes ? (hi < hi_cand ? hi : hi_cand) : hi;
+        if (++hi_votes >= 3) { ext_hi = hi_cand; hi_votes = 0; }
+    }
 }
 
 static int choose_vstart(void)
 {
     int h = video_height();
-    int want, i;
+    int want, size = 0;
 
     if ((++content_frame & 3) == 0) look_at_content();
-    if (!content_n) {
+    if (ext_lo < 0) {
         want = (a26.region == REGION_PAL) ? 48 : 36;
     } else {
-        int first = content_first[0], last = content_last[0];
-        for (i = 1; i < content_n; i++) {
-            if (content_first[i] < first) first = content_first[i];
-            if (content_last[i] > last) last = content_last[i];
-        }
         /* centred; a picture taller than the display loses the same at
          * the top and at the bottom */
-        want = first - (h - (last - first + 1)) / 2;
+        size = ext_hi - ext_lo + 1;
+        want = ext_lo - (h - size) / 2;
+        if (centred_size < 0) {
+            vstart = -1;                        /* first extent: at once */
+            centred_size = size;
+        } else if (vstart >= 0 && ext_lo >= vstart && ext_hi < vstart + h &&
+                   size < centred_size + 16) {
+            want = vstart;                      /* fits: stay */
+        }
     }
     if (want > TIA_FB_LINES - h) want = TIA_FB_LINES - h;
     if (want < 0) want = 0;
@@ -292,7 +311,10 @@ static int choose_vstart(void)
         vstart = want;
     } else if (want != vstart) {
         if (want == vstart_pending) {
-            if (++vstart_count >= 30) vstart = want;
+            if (++vstart_count >= 30) {
+                vstart = want;
+                if (size) centred_size = size;
+            }
         } else {
             vstart_pending = want;
             vstart_count = 0;
