@@ -175,14 +175,23 @@ void video_render(const u8 *tia_fb, int fb_lines, int first)
 
     for (y = 0; y < height; y++) {
         int src = first + y;
-        const u32 *line = (src >= 0 && src < fb_lines)
-            ? (const u32 *)(const void *)(tia_fb + src * VC_WIDTH) : black_line;
+        const u32 *line;
         u32 *ps, *ms, *mp;
         u8 *row;
         int n, i, p;
 
-        if (b->valid[y] && vc_same_line(line, b->shadow[y]))
-            continue;
+        if (src >= 0 && src < fb_lines) {
+            /* skip the run of unchanged lines in one go */
+            int end = fb_lines - first < height ? fb_lines - first : height;
+            y += vc_scan_same(tia_fb + src * VC_WIDTH, b->shadow[y], &b->valid[y], end - y);
+            if (y >= end) { y = end - 1; continue; }
+            src = first + y;
+            line = (const u32 *)(const void *)(tia_fb + src * VC_WIDTH);
+        } else {
+            line = black_line;
+            if (b->valid[y] && vc_same_line(line, b->shadow[y]))
+                continue;
+        }
 
         n = vc_convert_line((const u8 *)line, y & 1, moves, pl);
         for (i = n; i < b->nmoves[y]; i++)

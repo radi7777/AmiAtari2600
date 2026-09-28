@@ -29,7 +29,9 @@ static void bench_render(const u8 *fb, int first)
     for (y = 0; y < HEIGHT; y++) {
         const u32 *line = (const u32 *)(const void *)(fb + (first + y) * VC_WIDTH);
         int n;
-        if (valid[y] && vc_same_line(line, shadow[y])) continue;
+        y += vc_scan_same((const u8 *)line, shadow[y], &valid[y], HEIGHT - y);
+        if (y >= HEIGHT) break;
+        line = (const u32 *)(const void *)(fb + (first + y) * VC_WIDTH);
         n = vc_convert_line((const u8 *)line, y & 1, moves, pl);
         for (i = n; i < nmoves[y]; i++) moves[i] = 0x01FE0000UL;
         for (i = 0; i < n || i < nmoves[y]; i++)

@@ -16,7 +16,8 @@
 ;   d2 = A   d3 = X   d4 = Y    (upper 24 bits always zero)
 ;   d5 = cycle counter (a26_cycles)
 ;   d6 = N source (bit 7)   d7 = Z source (Z set when byte == 0)
-;   a2 = opcode table   a3 = PC as host pointer (see cpu_asm.h)   a4 = AsmCpu
+;   a2 = end of the fast code page (copy of C_PCEND)   a3 = PC as host
+;   pointer (see cpu_asm.h)   a4 = AsmCpu
 ;   a5 = read map       a6 = ram_base
 ;
 ; Timing: every memory access adds one cycle (fast paths do addq.l #1,d5,
@@ -75,7 +76,7 @@ READ    macro
 
 ; fetch the next code byte -> d0.l. Fast path: a3 points into the ROM.
 FETCHB  macro
-        cmp.l   C_PCEND(a4),a3
+        cmp.l   a2,a3
         bhs.s   .s\@
         moveq   #0,d0
         move.b  (a3)+,d0
@@ -98,6 +99,7 @@ SETPC   macro
         move.l  d0,a3
         clr.l   C_PCBIAS(a4)
         clr.l   C_PCEND(a4)
+        suba.l  a2,a2
         endm
 
 ; fetch 16 bit operand at PC -> d0.l
@@ -215,7 +217,18 @@ EA_ABW  macro
 ; (zp),Y read
 EA_IZYR macro
         FETCHB
-        move.b  d0,C_TMP2(a4)
+        tst.b   d0
+        bpl.s   .sl\@                  ; pointer in TIA space: slow path
+        cmp.b   #$ff,d0
+        beq.s   .sl\@                  ; $FF: the high byte wraps to $00
+        move.b  1(a6,d0.w),d1           ; pointer from RIOT RAM, 2 cycles
+        lsl.w   #8,d1
+        move.b  (a6,d0.w),d1
+        addq.l  #2,d5
+        moveq   #0,d0
+        move.w  d1,d0
+        bra.s   .ea\@
+.sl\@:  move.b  d0,C_TMP2(a4)
         ZPREAD
         move.b  d0,C_TMP+1(a4)
         moveq   #0,d0
@@ -225,7 +238,7 @@ EA_IZYR macro
         move.b  d0,C_TMP(a4)
         moveq   #0,d0
         move.w  C_TMP(a4),d0
-        move.w  d0,d1
+.ea\@:  move.w  d0,d1
         add.w   d4,d0
         eor.w   d0,d1
         and.w   #$ff00,d1
@@ -237,7 +250,18 @@ EA_IZYR macro
 ; (zp),Y write
 EA_IZYW macro
         FETCHB
-        move.b  d0,C_TMP2(a4)
+        tst.b   d0
+        bpl.s   .sl\@
+        cmp.b   #$ff,d0
+        beq.s   .sl\@
+        move.b  1(a6,d0.w),d1
+        lsl.w   #8,d1
+        move.b  (a6,d0.w),d1
+        addq.l  #2,d5
+        moveq   #0,d0
+        move.w  d1,d0
+        bra.s   .ea\@
+.sl\@:  move.b  d0,C_TMP2(a4)
         ZPREAD
         move.b  d0,C_TMP+1(a4)
         moveq   #0,d0
@@ -247,7 +271,7 @@ EA_IZYW macro
         move.b  d0,C_TMP(a4)
         moveq   #0,d0
         move.w  C_TMP(a4),d0
-        add.w   d4,d0
+.ea\@:  add.w   d4,d0
         addq.l  #1,d5
         endm
 
@@ -328,20 +352,8 @@ asmcpu_exec:
         move.l  48(sp),a4
         lea     C_MAP(a4),a5
         move.l  C_RAM(a4),a6
-        lea     optable(pc),a2
         bsr     sync_in
-
-loop:
-        cmp.l   C_TARGET(a4),d5
-        bpl.s   exit
-        FETCHB
-        move.l  (a2,d0.w*4),a0
-        jmp     (a0)
-
-exit:
-        bsr     sync_out
-        movem.l (sp)+,d2-d7/a2-a6
-        rts
+        bra     loop
 
 sync_in:
         move.l  C_A(a4),d2
@@ -350,6 +362,7 @@ sync_in:
         move.l  C_PC(a4),a3
         clr.l   C_PCBIAS(a4)
         clr.l   C_PCEND(a4)
+        suba.l  a2,a2
         move.l  C_CYC(a4),d5
         move.l  C_P(a4),d0
         bra     unpackp
@@ -432,6 +445,7 @@ slow_read:
         addq.l  #4,sp
         and.l   #$ff,d0
         move.l  C_CYC(a4),d5
+        move.l  C_PCEND(a4),a2          ; a bankswitch may have cleared it
         rts
 
 ; d0.w = address, d1.b = value
@@ -468,6 +482,7 @@ slow_write:
         jsr     (a0)
         addq.l  #8,sp
         move.l  C_CYC(a4),d5
+        move.l  C_PCEND(a4),a2
         rts
 
 ; zero page write below $80 (d0 = $00-$7F): the TIA in 2600 mode
@@ -508,6 +523,7 @@ fetch_slow:
         add.w   #$100,d1                ; bytes left in this page (1..256)
         lea     (a3,d1.w),a0
         move.l  a0,C_PCEND(a4)
+        move.l  a0,a2
         moveq   #0,d0
         move.b  (a3)+,d0
         addq.l  #1,d5
@@ -515,6 +531,7 @@ fetch_slow:
 .slowpage:
         clr.l   C_PCBIAS(a4)
         clr.l   C_PCEND(a4)
+        suba.l  a2,a2
         move.l  d0,a3
         addq.l  #1,a3                   ; PC + 1 (bias 0: a3 is the PC)
         bra     slow_read
@@ -1096,6 +1113,26 @@ op_28:  addq.l  #2,d5           ; PLP
 ; ======================================================================
 ; opcode table (unlisted opcodes -> fallback to the C core)
 ; ======================================================================
+        cnop    0,4
+; ---- dispatch, right before the opcode table (short PC-relative index)
+loop:
+        cmp.l   C_TARGET(a4),d5
+        bpl.s   exit
+        cmp.l   a2,a3
+        bhs.s   .slow
+        moveq   #0,d0
+        move.b  (a3)+,d0
+        addq.l  #1,d5
+        move.l  optable(pc,d0.w*4),a0
+        jmp     (a0)
+.slow:  bsr     fetch_slow
+        move.l  optable(pc,d0.w*4),a0
+        jmp     (a0)
+exit:
+        bsr     sync_out
+        movem.l (sp)+,d2-d7/a2-a6
+        rts
+
         cnop    0,4
 optable:
         dc.l    fallback,fallback,fallback,fallback,fallback,op_05,op_06,fallback   ; $00

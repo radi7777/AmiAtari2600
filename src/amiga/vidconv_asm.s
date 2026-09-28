@@ -10,6 +10,7 @@
 
         xdef    _vc_convert_line
         xdef    _vc_same_line
+        xdef    _vc_scan_same
         xref    _vc_rgb12
         xref    _vc_slotmap
         xref    _vc_c2p_w
@@ -35,6 +36,35 @@ _vc_same_line:
         moveq   #1,d0
         rts
 .no:    moveq   #0,d0
+        rts
+
+; ---------------------------------------------------------------------
+; int vc_scan_same(const u8 *fb, const u32 *shadow, const u8 *valid, int count)
+; number of leading lines that are valid and equal to their shadow copy
+_vc_scan_same:
+        movem.l d2/a2,-(sp)
+        move.l  12(sp),a0               ; fb
+        move.l  16(sp),a1               ; shadow
+        move.l  20(sp),a2               ; valid flags
+        move.l  24(sp),d2               ; count
+        moveq   #0,d0
+        bra.s   .test
+.line:  tst.b   (a2)+
+        beq.s   .out
+        moveq   #9,d1
+.cmp:   cmpm.l  (a0)+,(a1)+
+        bne.s   .out
+        cmpm.l  (a0)+,(a1)+
+        bne.s   .out
+        cmpm.l  (a0)+,(a1)+
+        bne.s   .out
+        cmpm.l  (a0)+,(a1)+
+        bne.s   .out
+        dbra    d1,.cmp
+        addq.l  #1,d0
+.test:  cmp.l   d2,d0
+        blt.s   .line
+.out:   movem.l (sp)+,d2/a2
         rts
 
 ; ---------------------------------------------------------------------

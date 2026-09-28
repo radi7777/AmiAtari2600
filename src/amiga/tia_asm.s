@@ -15,6 +15,7 @@
         xref    _tia_coll_table         ; u16 [64]
         xref    _tia_zero_mask          ; u8 [320], all 0
         xref    _tia_prio_table         ; u8 [2][64]
+        xref    _tia_rep4               ; u32 [3]: background, PF left, PF right x 4
 
         include "tia_offs.i"
 
@@ -161,29 +162,10 @@ playfield:
         bge     .pfdone
 
 .blocks:
-        ; replicate the three colours: d3 = background, d4 = left, d5 = right
-        move.b  d3,d4
-        lsl.w   #8,d3
-        move.b  d4,d3
-        move.w  d3,d4
-        swap    d3
-        move.w  d4,d3
-        moveq   #0,d4
-        move.b  T_COLL_L+C_PF(a6),d4
-        move.b  d4,d5
-        lsl.w   #8,d4
-        move.b  d5,d4
-        move.w  d4,d5
-        swap    d4
-        move.w  d5,d4
-        moveq   #0,d5
-        move.b  T_COLR+C_PF(a6),d5
-        move.b  d5,d1
-        lsl.w   #8,d5
-        move.b  d1,d5
-        move.w  d5,d1
-        swap    d5
-        move.w  d1,d5
+        ; the three colours as longwords: background, left, right
+        move.l  _tia_rep4,d3
+        move.l  _tia_rep4+4,d4
+        move.l  _tia_rep4+8,d5
 
         lea     (a0,d0.l),a1            ; output, aligned
         move.l  d0,d7

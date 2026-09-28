@@ -7,6 +7,9 @@
 
         xref    _tia
         xref    _tia_render
+        xref    _tia_hmove_disp
+        xref    _tia_upd_obj
+        xref    _tia_rep4
 
         section "CODE",code
 
@@ -45,9 +48,84 @@ _tia_write_asm:
         dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
         dc.w    .c-.jt,.c-.jt,.c-.jt,.grp0-.jt,.grp1-.jt,.enam0-.jt,.enam1-.jt,.enabl-.jt
         dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
+        dc.w    .c-.jt,.c-.jt,.hmove-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
         dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
         dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
-        dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
+
+.hmove: ; HMOVE (see tia.c): locked objects are handled in C
+        tst.b   T_HMLOCK(a6)
+        bne     .c
+        tst.b   T_HMLOCK+1(a6)
+        bne     .c
+        tst.b   T_HMLOCK+2(a6)
+        bne     .c
+        tst.b   T_HMLOCK+3(a6)
+        bne     .c
+        tst.b   T_HMLOCK+4(a6)
+        bne     .c
+        move.l  d7,d0
+        bsr     update_to
+        move.l  d7,d0
+        sub.l   T_LSC(a6),d0            ; hpos
+.hp0:   bpl.s   .hp1
+        add.l   #LINE_CC,d0
+        bra.s   .hp0
+.hp1:   cmp.l   #LINE_CC,d0
+        blt.s   .hp2
+        sub.l   #LINE_CC,d0
+        bra.s   .hp1
+.hp2:   move.l  d7,d1
+        sub.l   d0,d1
+        move.l  d1,T_HMLCC(a6)          ; start of this line
+        divu.w  #3,d0
+        and.l   #$FFFF,d0               ; w = CPU cycle in the line
+        cmp.w   #75,d0
+        bls.s   .hp3
+        moveq   #75,d0
+.hp3:   move.b  d0,T_HMW(a6)
+        lea     _tia_hmove_disp,a0
+        add.l   d0,a0                   ; &hmove_disp[0][w]
+        moveq   #4,d2
+        moveq   #0,d3
+.hv:    moveq   #0,d1
+        move.b  T_HMP0(a6,d3.w),d1
+        lsr.b   #4,d1
+        move.b  d1,d4
+        eor.b   #8,d4
+        move.b  d4,T_HMV(a6,d3.w)       ; extra clocks due
+        mulu.w  #76,d1
+        move.b  (a0,d1.l),T_HMDISP(a6,d3.w)
+        addq.w  #1,d3
+        dbra    d2,.hv
+        cmp.w   #20,d0
+        bhi.s   .hb
+        move.b  #1,T_HMB(a6)            ; HMOVE blank on this line
+.hb:    cmp.w   #54,d0
+        bhs.s   .hlate
+        ; move now: only objects with a displacement
+        moveq   #0,d3
+.ha:    move.b  T_HMDISP(a6,d3.w),d1
+        beq.s   .hn
+        ext.w   d1
+        moveq   #0,d4
+        move.b  T_POS(a6,d3.w),d4
+        add.w   d1,d4
+        bpl.s   .hq
+        add.w   #160,d4
+.hq:    cmp.w   #160,d4
+        blt.s   .hr
+        sub.w   #160,d4
+.hr:    move.b  d4,T_POS(a6,d3.w)
+        move.l  d3,-(sp)
+        jsr     _tia_upd_obj
+        move.l  (sp)+,d3
+.hn:    addq.w  #1,d3
+        cmp.w   #5,d3
+        blt.s   .ha
+        clr.b   T_HMPEND(a6)
+        bra     .done
+.hlate: move.b  #1,T_HMPEND(a6)         ; applied at the end of the line
+        bra     .done
 
 .c:     ; everything else: C. Catching up to the write cycle first is
         ; always correct (the C code draws exactly the same pixels) and
@@ -241,7 +319,20 @@ upd_colors:
         bne.s   .ns
         move.b  d1,T_COLL_L+1(a6)       ; score mode: PF in the player colours
         move.b  d2,T_COLR+1(a6)
-.ns:    rts
+.ns:    ; replicated for the playfield blocks (tia_rep4)
+        moveq   #0,d0
+        move.b  T_COLUBK(a6),d0
+        mulu.l  #$01010101,d0
+        move.l  d0,_tia_rep4
+        moveq   #0,d0
+        move.b  T_COLL_L+1(a6),d0
+        mulu.l  #$01010101,d0
+        move.l  d0,_tia_rep4+4
+        moveq   #0,d0
+        move.b  T_COLR+1(a6),d0
+        mulu.l  #$01010101,d0
+        move.l  d0,_tia_rep4+8
+        rts
 
 ; render up to colour clock d0 (update_to in tia.c); keeps d5, d7, a1-a3
 update_to:

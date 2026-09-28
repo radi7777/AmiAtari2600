@@ -91,7 +91,7 @@ int tia_use_reference;          /* 1 = original per-pixel renderer */
  * cycle of the HMOVE write within the line (0..75). Measured from
  * gopher2600 with tools/gen_hmove_rom.py; identical for all objects.
  * Cycles 0-2 behave like 3, 75 like 74. */
-static const s8 hmove_disp[16][76] = {
+const s8 tia_hmove_disp[16][76] = {
     {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,   2,   3,   4,   4,
         5,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
         0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
@@ -157,6 +157,8 @@ static const s8 hmove_disp[16][76] = {
         0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
         0,   0,   0,   0,   0,   0,   0,   0,  -1,  -1,  -2,  -3,  -4,  -4,  -5,  -6,  -7,  -7,  -7 }
 };
+
+#define hmove_disp tia_hmove_disp
 
 /* The model behind the table (it reproduces every entry): HMOVE written in
  * CPU cycle w starts a ripple counter that ticks every 4 colour clocks from
@@ -471,6 +473,10 @@ static void upd_pf(void)
            | ((u32)tia.pf2 << 12);
 }
 
+/* background, playfield left and right replicated to 4 pixels (for the
+ * 68k renderer's playfield blocks); kept up to date by upd_colors */
+u32 tia_rep4[3];
+
 static void upd_colors(void)
 {
     u8 score = (tia.ctrlpf & 0x06) == 0x02;    /* score mode, not with PF priority */
@@ -481,6 +487,9 @@ static void upd_colors(void)
     tia.col_l[C_PF] = score ? tia.colup0 : tia.colupf;
     tia.col_r[C_PF] = score ? tia.colup1 : tia.colupf;
     tia.prio = prio_table[(tia.ctrlpf >> 2) & 1];
+    tia_rep4[0] = 0x01010101UL * tia.colubk;
+    tia_rep4[1] = 0x01010101UL * tia.col_l[C_PF];
+    tia_rep4[2] = 0x01010101UL * tia.col_r[C_PF];
 }
 
 /* ---- audio ------------------------------------------------------------ */
@@ -763,6 +772,8 @@ TIA_OFS(hmove_blank, 97); TIA_OFS(pos_p0, 98); TIA_OFS(pos_bl, 102);
 TIA_OFS(colup0, 127); TIA_OFS(colupf, 129); TIA_OFS(refp0, 130); TIA_OFS(pf0, 132); TIA_OFS(pf2, 134);
 TIA_OFS(grp0_new, 135); TIA_OFS(grp1_old, 138); TIA_OFS(enam0, 139); TIA_OFS(enabl_old, 142);
 TIA_OFS(vdelp0, 148); TIA_OFS(vdelbl, 150); TIA_OFS(resmp0, 151); TIA_OFS(resmp1, 152);
+TIA_OFS(hmp0, 143); TIA_OFS(hmbl, 147); TIA_OFS(hm_disp, 155); TIA_OFS(hm_pending, 160); TIA_OFS(hm_w, 161);
+TIA_OFS(hm_line_cc, 162); TIA_OFS(hm_v, 166); TIA_OFS(hm_lock, 171);
 #endif
 
 /* draw pixels [x0, x1) of the current line */
@@ -893,6 +904,17 @@ static void end_line(void)
 void tia_end_line(void)         /* for tia_asm.s */
 {
     end_line();
+}
+
+void tia_upd_obj(int i)         /* for tiawr_asm.s: object i moved */
+{
+    switch (i) {
+    case 0: upd_p0(); break;
+    case 1: upd_p1(); break;
+    case 2: upd_m0(); break;
+    case 3: upd_m1(); break;
+    default: upd_bl(); break;
+    }
 }
 
 static void update_to(u32 target)

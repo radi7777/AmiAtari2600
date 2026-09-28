@@ -142,6 +142,17 @@ int vc_same_line_c(const u32 *a, const u32 *b)
     return 1;
 }
 
+int vc_scan_same_c(const u8 *fb, const u32 *shadow, const u8 *valid, int count)
+{
+    int k;
+    for (k = 0; k < count; k++) {
+        if (!valid[k] || !vc_same_line_c((const u32 *)(const void *)(fb + k * VC_WIDTH),
+                                         shadow + k * (VC_WIDTH / 4)))
+            break;
+    }
+    return k;
+}
+
 int vc_convert_line_c(const u8 *tia_line, int bank, u32 *moves, u32 *planes)
 {
     u8 slots[VC_WIDTH];

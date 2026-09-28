@@ -53,6 +53,13 @@ T_VDELP1  equ 149
 T_VDELBL  equ 150
 T_RESMP0  equ 151
 T_RESMP1  equ 152
+T_HMP0    equ 143                   ; HMP0, HMP1, HMM0, HMM1, HMBL
+T_HMDISP  equ 155                   ; s8 [5]
+T_HMPEND  equ 160
+T_HMW     equ 161
+T_HMLCC   equ 162                   ; u32 (word aligned)
+T_HMV     equ 166                   ; u8 [5]
+T_HMLOCK  equ 171                   ; u8 [5]
 LINE_CC   equ 228
 HBLANK    equ 68
 FB_LINES  equ 320

@@ -50,13 +50,20 @@ int  vc_convert_line_c(const u8 *tia_line, int bank, u32 *moves, u32 *planes);
 /* 1 if the two TIA lines (160 bytes, longword aligned) are equal */
 int  vc_same_line_c(const u32 *a, const u32 *b);
 
+/* number of leading lines (at most count) that are valid and equal:
+ * fb = TIA lines (160 bytes each), shadow = copies (160 bytes each),
+ * valid = one flag per line */
+int  vc_scan_same_c(const u8 *fb, const u32 *shadow, const u8 *valid, int count);
+
 #ifdef A26_ASM_VIDEO
 /* 68k assembler versions (vidconv_asm.s), same results */
 int  vc_convert_line(const u8 *tia_line, int bank, u32 *moves, u32 *planes);
 int  vc_same_line(const u32 *a, const u32 *b);
+int  vc_scan_same(const u8 *fb, const u32 *shadow, const u8 *valid, int count);
 #else
 #define vc_convert_line vc_convert_line_c
 #define vc_same_line vc_same_line_c
+#define vc_scan_same vc_scan_same_c
 #endif
 
 /* like vc_convert_line, but only computes the register index (0..15)
