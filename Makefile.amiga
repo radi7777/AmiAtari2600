@@ -44,7 +44,7 @@ endif
 
 .PHONY: all clean map
 
-all: $(OUT)/A26
+all: $(OUT)/A26 $(OUT)/A26GUI
 
 $(OUT)/A26: $(OBJ)
 	$(VC) $(CONFIG) $(CPU) -o $@ $(OBJ) -lamiga
@@ -137,3 +137,20 @@ $(BENCH_OUT)/%_asm.o: src/amiga/%_asm.s src/amiga/tia_offs.i
 
 $(BENCH_OUT)/bench.exe: $(BENCH_OUT)/start.o $(BENCH_OBJ) $(BENCH_OUT)/cpu6507.o $(BENCH_OUT)/vidconv_asm.o $(BENCH_OUT)/tia_asm.o $(BENCH_OUT)/tiawr_asm.o
 	vlink -bamigahunk -x -Bstatic -Cvbcc -nostdlib -mrel $^ -s -Rshort -L$(VBCCLIB) -lvc -o $@ -M$(BENCH_OUT)/bench.map
+
+# ---- MUI launcher (src/gui) ----
+# libraries/mui.h comes from the MUI SDK; only it and muiaros.h are copied
+# (the rest of that include directory is for gcc)
+MUI_SDK ?= $(abspath $(dir $(shell which $(VC)))../m68k-amigaos/include)
+GUI_SRC := src/gui/a26gui.c src/gui/gamedb.c src/core/cart.c
+
+.PHONY: gui
+gui: $(OUT)/A26GUI
+
+$(OUT)/muiinc/libraries/mui.h: $(MUI_SDK)/libraries/mui.h
+	@mkdir -p $(dir $@)
+	cp $(MUI_SDK)/libraries/mui.h $(dir $@)
+
+$(OUT)/A26GUI: $(GUI_SRC) src/gui/*.h src/core/cart.h $(OUT)/muiinc/libraries/mui.h
+	$(VC) $(CONFIG) -c99 $(CPU) $(OPT) -DA26_BIG_ENDIAN $(if $(NDK_INC),-I$(NDK_INC)) -I$(OUT)/muiinc \
+	  -o $@ $(GUI_SRC) -lamiga

@@ -11,6 +11,9 @@
  *   SKIP=n         render only every (n+1)th frame (default: automatic)
  *   DELAY=n        start emulating each frame n raster lines after the
  *                  vertical blank (default: automatic, DELAY=0 turns it off)
+ *   LEFT=A|B       left difficulty switch at start (default B)
+ *   RIGHT=A|B      right difficulty switch at start (default B)
+ *   BW             TV type switch on B&W at start
  *   PORT1          use the joystick in the mouse port as player 2
  *   NOSOUND        no Paula output
  *   PRI=n          task priority while running (default 19, just below
@@ -51,6 +54,8 @@ static struct {
     int skip;           /* -1 auto */
     int delay;          /* -1 auto */
     int port1;
+    int diff0, diff1;   /* difficulty switches at start: 1 = A */
+    int bw;             /* B&W at start */
     int nosound;
     int killos;
     int nohandler;      /* diagnostics: no input.device handler */
@@ -152,6 +157,11 @@ static int parse_args(int argc, char **argv)
         else if (strncmp(a, "FRAMES=", 7) == 0 || strncmp(a, "frames=", 7) == 0) opt.frames = atol(a + 7);
         else if (strncmp(a, "DELAY=", 6) == 0 || strncmp(a, "delay=", 6) == 0) opt.delay = atoi(a + 6);
         else if (streq_nocase(a, "PORT1")) opt.port1 = 1;
+        else if (streq_nocase(a, "LEFT=A")) opt.diff0 = 1;
+        else if (streq_nocase(a, "LEFT=B")) opt.diff0 = 0;
+        else if (streq_nocase(a, "RIGHT=A")) opt.diff1 = 1;
+        else if (streq_nocase(a, "RIGHT=B")) opt.diff1 = 0;
+        else if (streq_nocase(a, "BW")) opt.bw = 1;
         else if (streq_nocase(a, "NOSOUND")) opt.nosound = 1;
         else if (streq_nocase(a, "KILLOS")) opt.killos = 1;
         else if (strncmp(a, "PRI=", 4) == 0 || strncmp(a, "pri=", 4) == 0) hw_task_pri = atoi(a + 4);
@@ -171,7 +181,8 @@ static int parse_args(int argc, char **argv)
     if (!opt.rom) {
         printf("A26 %s - Atari 2600 emulator for Amiga 68030/ECS\n"
                "usage: A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|F4|...]\n"
-               "           [SKIP=n] [DELAY=n] [PORT1] [NOSOUND] [KILLOS] [PROFILE] [BENCH=n] [FRAMES=n]\n", VERSION);
+               "           [SKIP=n] [DELAY=n] [PORT1] [LEFT=A|B] [RIGHT=A|B] [BW] [NOSOUND] [KILLOS]\n"
+               "           [PRI=n] [PROFILE] [BENCH=n] [FRAMES=n]\n", VERSION);
         return -1;
     }
     return 0;
@@ -305,7 +316,7 @@ static void delay_wait(void)
 static void run(void)
 {
     u8 switches = 0;
-    int bw = 0, diff0 = 0, diff1 = 0, paused = 0;
+    int bw = opt.bw, diff0 = opt.diff0, diff1 = opt.diff1, paused = 0;
     int skip_count = 0, late = 0;
 
     ULONG t, t_start, t_work;
