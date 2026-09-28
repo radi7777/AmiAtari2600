@@ -101,6 +101,9 @@ A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [DELAY=n] [PORT
   nächsten Vertical Blank fertig ist: Das verkürzt die Zeit zwischen Joystick und Bild.
   `DELAY=0` schaltet das ab.
 - `PORT1`: Joystick im Mausport steuert Spieler 2.
+- `PRI=n`: Task-Priorität während des Spiels. Standard ist 19: über Netzwerk- und
+  WLAN-Tasks, die sonst gelegentlich 100–150 ms Rechenzeit belegen (sichtbarer Hänger),
+  und unter input.device (20), damit die Tastatur immer bedienbar bleibt.
 - `KILLOS`: schaltet während des Spiels die OS-Interrupts ab (etwas schneller auf
   langsamen Maschinen). Standard ist der systemfreundliche Modus, in dem Timer,
   Tastatur und Netzwerk weiterlaufen.

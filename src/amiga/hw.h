@@ -45,6 +45,7 @@ int  hw_set_pal(int pal);
 void hw_wait_vbl(void);         /* wait for the next vertical blank */
 void hw_wait_line(int line);
 extern int hw_no_timer;
+extern int hw_task_pri;         /* task priority while running (default 19) */
 
 /* PC sampling profiler, only with kill_os (PROFPC) */
 int  hw_profile_start(void);

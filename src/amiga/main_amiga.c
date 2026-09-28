@@ -13,6 +13,8 @@
  *                  vertical blank (default: automatic, DELAY=0 turns it off)
  *   PORT1          use the joystick in the mouse port as player 2
  *   NOSOUND        no Paula output
+ *   PRI=n          task priority while running (default 19, just below
+ *                  input.device)
  *   KILLOS         switch off the OS interrupts while running (a little
  *                  faster on slow machines; the network may not survive)
  *   PROFILE        print timing statistics on exit
@@ -152,6 +154,7 @@ static int parse_args(int argc, char **argv)
         else if (streq_nocase(a, "PORT1")) opt.port1 = 1;
         else if (streq_nocase(a, "NOSOUND")) opt.nosound = 1;
         else if (streq_nocase(a, "KILLOS")) opt.killos = 1;
+        else if (strncmp(a, "PRI=", 4) == 0 || strncmp(a, "pri=", 4) == 0) hw_task_pri = atoi(a + 4);
         else if (streq_nocase(a, "NOHANDLER")) opt.nohandler = 1;
         else if (streq_nocase(a, "NOTIMER")) opt.notimer = 1;
         else if (streq_nocase(a, "PROFPC")) { opt.profpc = 1; opt.killos = 1; }
@@ -262,9 +265,9 @@ static void input_hook(void)
  * Emulating a frame takes only part of a display frame on a fast machine.
  * Instead of starting right after the vertical blank and then idling, we
  * start as late as possible, so input is read shortly before the frame is
- * shown. The start line follows the slowest of the last 64 frames plus a
+ * shown. The start line follows the slowest of the last 128 frames plus a
  * margin; a missed vertical blank adds extra margin for the next frames. */
-#define WORK_HIST 64
+#define WORK_HIST 128
 static int   delay_line;
 static ULONG work_hist[WORK_HIST];
 static int   work_pos;
@@ -289,7 +292,7 @@ static void delay_update(ULONG work, int late)
         late_bonus = (ULONG)budget / 4;  /* missed the vertical blank */
     else if (late_bonus)
         late_bonus--;
-    d = budget - (int)(peak + peak / 4 + late_bonus) - 12;
+    d = budget - (int)(peak + peak / 4 + late_bonus) - 24;
     delay_line = d > 0 ? d : 0;
 }
 

@@ -51,6 +51,10 @@ static struct MsgPort *tmr_port;
 static struct TimeRequest *tmr_req;
 static int tmr_open;
 int hw_no_timer;
+/* above normal and network tasks (on a PiStorm with WLAN those stalled the
+ * emulator for up to 150 ms now and then), below input.device (20), so
+ * the keyboard keeps working even if the emulation never waits */
+int hw_task_pri = 19;
 extern int hw_is_pal;
 
 /* ---- PC sampling profiler (see irq.s) ---- */
@@ -252,8 +256,7 @@ void hw_takeover(int kill_os)
         tmr_port = CreateMsgPort();
         tmr_req = tmr_port ? (struct TimeRequest *)CreateIORequest(tmr_port, sizeof(struct TimeRequest)) : NULL;
         tmr_open = !hw_no_timer && tmr_req && !OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ, (struct IORequest *)tmr_req, 0);
-        /* above normal tasks, below input.device and the network stack */
-        old_pri = SetTaskPri(me, 1);
+        old_pri = SetTaskPri(me, hw_task_pri);
         hw->dmacon = DMAF_SPRITE | DMAF_AUD0 | DMAF_AUD1 | DMAF_AUD2 | DMAF_AUD3;
         hw->adkcon = 0x00FF;    /* no audio modulation (disk bits untouched) */
         goto sprites;
