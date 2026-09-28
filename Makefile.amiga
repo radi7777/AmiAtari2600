@@ -33,7 +33,8 @@ CFLAGS   += -Dstatic=
 endif
 
 CORE_SRC  := src/core/cpu.c src/core/bus.c src/core/tia.c src/core/riot.c \
-             src/core/cart.c src/core/atari.c src/core/palette.c
+             src/core/cart.c src/core/atari.c src/core/palette.c \
+            src/core/unzip.c
 AMIGA_SRC := src/amiga/main_amiga.c src/amiga/hw.c src/amiga/video.c \
              src/amiga/vidconv.c src/amiga/audio.c src/amiga/input.c
 
@@ -113,7 +114,7 @@ $(TEST_OUT)/cputest_asm: tests/cpu_functional.c src/core/cpu.c src/core/cpu_asm.
 # ---- freestanding benchmark for tools/m68kprof (host 68k instruction
 # counter): core + asm CPU + video conversion, no OS, statics named.
 BENCH_OUT := build/m68kbench
-BENCH_SRC := $(CORE_SRC) src/core/cpu_asm.c src/amiga/vidconv.c tools/m68kprof/bench.c
+BENCH_SRC := $(filter-out src/core/unzip.c,$(CORE_SRC)) src/core/cpu_asm.c src/amiga/vidconv.c tools/m68kprof/bench.c
 BENCH_OBJ := $(patsubst %.c,$(BENCH_OUT)/%.o,$(BENCH_SRC))
 
 .PHONY: bench
@@ -142,7 +143,7 @@ $(BENCH_OUT)/bench.exe: $(BENCH_OUT)/start.o $(BENCH_OBJ) $(BENCH_OUT)/cpu6507.o
 # libraries/mui.h comes from the MUI SDK; only it and muiaros.h are copied
 # (the rest of that include directory is for gcc)
 MUI_SDK ?= $(abspath $(dir $(shell which $(VC)))../m68k-amigaos/include)
-GUI_SRC := src/gui/a26gui.c src/gui/gamedb.c src/gui/snapimg.c src/core/cart.c
+GUI_SRC := src/gui/a26gui.c src/gui/gamedb.c src/gui/snapimg.c src/core/cart.c src/core/unzip.c
 
 .PHONY: gui
 gui: $(OUT)/A26GUI

@@ -41,6 +41,7 @@
 #include "input.h"
 #include "../core/atari.h"
 #include "../core/bus.h"
+#include "../core/unzip.h"
 
 #define VERSION "0.1"
 
@@ -195,9 +196,16 @@ static int parse_args(int argc, char **argv)
 
 static u8 *load_rom(const char *name, u32 *size)
 {
-    FILE *f = fopen(name, "rb");
+    FILE *f;
     u8 *buf = NULL;
     long n;
+    if (zip_is_zip(name)) {             /* romsets come as zip files */
+        ZipEntry e;
+        if (zip_find_rom(name, &e)) return NULL;
+        *size = e.usize;
+        return zip_extract(name, &e);
+    }
+    f = fopen(name, "rb");
     if (!f) return NULL;
     fseek(f, 0, SEEK_END);
     n = ftell(f);

@@ -69,6 +69,33 @@ fi
 echo "== Amiga video conversion (copper palette + c2p, simulated)"
 if $VIDTEST $B/bars_ntsc.bin; then ok "vidconv"; else fail "vidconv"; fi
 
+if [ -x $B/unzip_test ] && command -v python3 >/dev/null; then
+    echo "== ROMs from zip files (stored, deflate levels 1 and 9, zip -9)"
+    Z=$B/ziptest
+    rm -rf $Z; mkdir -p $Z
+    zok=1
+    for r in $B/*.bin roms/*.bin; do
+        [ -f "$r" ] || continue
+        n=$(basename "$r" .bin)
+        python3 - "$r" "$Z/$n" <<'PY' || zok=0
+import sys, zipfile
+src, out = sys.argv[1], sys.argv[2]
+for tag, method, level in (("s", zipfile.ZIP_STORED, None), ("d1", zipfile.ZIP_DEFLATED, 1),
+                           ("d9", zipfile.ZIP_DEFLATED, 9)):
+    with zipfile.ZipFile("%s_%s.zip" % (out, tag), "w", method, compresslevel=level) as z:
+        z.writestr("readme.txt", "not a rom")
+        z.write(src, arcname="Game (USA).bin")
+PY
+        if command -v zip >/dev/null; then
+            (cp "$r" "$Z/$n.a26" && cd $Z && zip -q -9 "${n}_z.zip" "$n.a26" && rm "$n.a26") || zok=0
+        fi
+        for zf in $Z/${n}_*.zip; do
+            $B/unzip_test "$zf" "$r" || zok=0
+        done
+    done
+    [ $zok = 1 ] && ok "unzip" || fail "unzip"
+fi
+
 if [ -x $B/snapimg_test ]; then
     echo "== GUI screenshot cache"
     if $B/snapimg_test $B/snapimg_test.a26i >/dev/null; then ok "snapimg"; else fail "snapimg"; fi

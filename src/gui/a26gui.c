@@ -39,6 +39,7 @@
 #include "gamedb.h"
 #include "snapimg.h"
 #include "../core/cart.h"
+#include "../core/unzip.h"
 
 #define VERSION "0.1"
 static const char vers[] = "$VER: A26GUI " VERSION " (" __DATE__ ")";
@@ -526,16 +527,16 @@ static int cmp_game(const void *a, const void *b)
     }
 }
 
-static void scan_roms(void)
+static int scan_cap;
+
+/* ROMs (.bin/.a26/.rom and .zip) in dirpath and its drawers (romsets
+ * come sorted into drawers), up to 4 levels deep */
+static void scan_dir(const char *dirpath, int depth)
 {
     struct FileInfoBlock *fib = (struct FileInfoBlock *)AllocDosObject(DOS_FIB, NULL);
-    BPTR dir = Lock((STRPTR)romdir, ACCESS_READ);
+    BPTR dir = Lock((STRPTR)dirpath, ACCESS_READ);
     static unsigned char buf[65536];
-    int cap = 0;
 
-    free(games);
-    games = NULL;
-    ngames = 0;
     if (!fib || !dir) {
         if (dir) UnLock(dir);
         if (fib) FreeDosObject(DOS_FIB, fib);
@@ -548,38 +549,69 @@ static void scan_roms(void)
             size_t l = strlen(n);
             FILE *f;
             long size;
+            crc_t crc;
+            int zip;
             Game *g;
-            if (fib->fib_DirEntryType > 0) continue;
-            if (fib->fib_Size < 2048 || fib->fib_Size > 65536) continue;
-            if (l < 4 || !(icase_has(n + l - 4, ".bin") || icase_has(n + l - 4, ".a26") ||
-                           icase_has(n + l - 4, ".rom")))
-                continue;
-            strcpy(path, romdir);
+            strcpy(path, dirpath);
             if (path[strlen(path) - 1] != ':' && path[strlen(path) - 1] != '/') strcat(path, "/");
             strncat(path, n, sizeof(path) - strlen(path) - 1);
-            f = fopen(path, "rb");
-            if (!f) continue;
-            size = (long)fread(buf, 1, sizeof(buf), f);
-            fclose(f);
-            if (ngames == cap) {
+            if (fib->fib_DirEntryType > 0) {
+                /* drawer (links are not followed: no loops) */
+                if (fib->fib_DirEntryType != ST_SOFTLINK && fib->fib_DirEntryType != ST_LINKDIR &&
+                    depth < 4)
+                    scan_dir(path, depth + 1);
+                continue;
+            }
+            zip = zip_is_zip(n);
+            if (!zip && (fib->fib_Size < 2048 || fib->fib_Size > 65536)) continue;
+            if (!zip && (l < 4 || !(icase_has(n + l - 4, ".bin") || icase_has(n + l - 4, ".a26") ||
+                                    icase_has(n + l - 4, ".rom"))))
+                continue;
+            if (zip) {
+                /* CRC and size from the zip directory, nothing unpacked */
+                ZipEntry e;
+                if (zip_find_rom(path, &e) || e.usize > 65536) continue;
+                size = (long)e.usize;
+                crc = e.crc;
+            } else {
+                f = fopen(path, "rb");
+                if (!f) continue;
+                size = (long)fread(buf, 1, sizeof(buf), f);
+                fclose(f);
+                crc = crc32_buf(0, buf, size);
+            }
+            if (ngames == scan_cap) {
                 Game *ng;
-                cap = cap ? cap * 2 : 64;
+                int cap = scan_cap ? scan_cap * 2 : 64;
                 ng = (Game *)realloc(games, cap * sizeof(Game));
                 if (!ng) break;
                 games = ng;
+                scan_cap = cap;
             }
             g = &games[ngames++];
             memset(g, 0, sizeof(*g));
             strcpy(g->path, path);
             g->size = size;
-            g->crc = crc32_buf(0, buf, size);
+            g->crc = crc;
             g->info = gamedb_find(g->crc);
             if (g->info && g->info->name) strncpy(g->name, g->info->name, sizeof(g->name) - 1);
-            else strncpy(g->name, n, sizeof(g->name) - 1);
+            else {
+                strncpy(g->name, n, sizeof(g->name) - 1);
+                if (zip && strlen(g->name) > 4) g->name[strlen(g->name) - 4] = 0;
+            }
         }
     }
     UnLock(dir);
     FreeDosObject(DOS_FIB, fib);
+}
+
+static void scan_roms(void)
+{
+    free(games);
+    games = NULL;
+    ngames = 0;
+    scan_cap = 0;
+    scan_dir(romdir, 0);
     if (ngames) qsort(games, ngames, sizeof(Game), cmp_game);
     free(shown);
     shown = (int *)malloc((ngames + 1) * sizeof(int));
@@ -715,7 +747,12 @@ static void refresh_info(void)
         set(img, MUIA_A26Img_File, NULL);
         return;
     }
-    {
+    if (zip_is_zip(g->path)) {
+        ZipEntry e;
+        u8 *rom = zip_find_rom(g->path, &e) ? NULL : zip_extract(g->path, &e);
+        type = rom ? cart_type_name(cart_detect(rom, e.usize)) : "?";
+        free(rom);
+    } else {
         static unsigned char rom[65536];
         FILE *f = fopen(g->path, "rb");
         long n = f ? (long)fread(rom, 1, sizeof(rom), f) : 0;

@@ -7,7 +7,8 @@ CFLAGS  += -Wall -Wextra -std=c99 -pedantic
 BUILD   := build
 
 CORE_SRC := src/core/cpu.c src/core/bus.c src/core/tia.c src/core/riot.c \
-            src/core/cart.c src/core/atari.c src/core/palette.c
+            src/core/cart.c src/core/atari.c src/core/palette.c \
+            src/core/unzip.c
 HOST_SRC := src/host/main_host.c
 
 .PHONY: all test clean m68k-build m68k-test m68k-profile
@@ -32,10 +33,13 @@ $(BUILD)/tia_check: tests/tia_equiv.c $(CORE_SRC) src/core/*.h | $(BUILD)
 $(BUILD)/snapimg_test: tests/snapimg_test.c src/gui/snapimg.c src/gui/snapimg.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/snapimg_test.c src/gui/snapimg.c
 
+$(BUILD)/unzip_test: tests/unzip_test.c src/core/unzip.c src/core/unzip.h | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/unzip_test.c src/core/unzip.c
+
 $(BUILD)/cpu_functional: tests/cpu_functional.c src/core/cpu.c src/core/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/cpu_functional.c src/core/cpu.c
 
-test: $(BUILD)/a26host $(BUILD)/cpu_functional $(BUILD)/vidconv_test $(BUILD)/tia_equiv $(BUILD)/tia_check $(BUILD)/snapimg_test
+test: $(BUILD)/a26host $(BUILD)/cpu_functional $(BUILD)/vidconv_test $(BUILD)/tia_equiv $(BUILD)/tia_check $(BUILD)/snapimg_test $(BUILD)/unzip_test
 	sh tests/run_tests.sh
 
 # Cross-check the core on a big-endian 68k CPU (needs m68k-linux-gnu-gcc,
