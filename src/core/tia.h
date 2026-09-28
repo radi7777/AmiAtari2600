@@ -46,30 +46,35 @@ typedef struct {
 
 typedef struct {
     /* ---- hot rendering state; longword aligned, fixed layout: the 68k
-     * renderer (src/amiga/tia_asm.s) uses these offsets, checked in tia.c */
+     * renderer (src/amiga/tia_asm.s, tia_offs.i) uses these offsets,
+     * checked in tia.c */
     u32 line_start_cc;      /*  0 absolute colour clock of current line start */
     u32 last_cc;            /*  4 rendered up to this colour clock */
     int line;               /*  8 scanline within current frame */
     u8  *fb;                /* 12 TIA_FB_LINES * TIA_WIDTH bytes */
+    /* 16..95: everything the pixels of a segment depend on (the segment
+     * memo compares this block, see render()) */
     u32 pf;                 /* 16 20 playfield bits in display order */
     const u8 *p0_mask, *p1_mask, *m0_mask, *m1_mask, *bl_mask;   /* 20..36 */
     /* pixel runs (offset, length pairs relative to the object position)
      * where the object can draw: P0, P1, M0, M1, BL */
     const u8 *runs[5];      /* 40..56 */
     const u8 *prio;         /* 60 64-entry object->colour index table */
-    int cur_first_visible;  /* 64 */
-    int cur_last_visible;   /* 68 */
-    u16 coll;               /* 72 collision latches */
-    u8  nruns[5];           /* 74..78 */
-    u8  gp0, gp1;           /* 79, 80 current player graphics incl. VDEL + reflect */
-    u8  m0_on, m1_on, bl_on;    /* 81..83 */
-    u8  col_l[5], col_r[5]; /* 84..93 colour per index for left/right half */
-    u8  vblank;             /* 94 */
-    u8  ctrlpf;             /* 95 */
-    u8  colubk;             /* 96 */
-    u8  hmove_blank;        /* 97 */
-    u8  pos_p0, pos_p1, pos_m0, pos_m1, pos_bl;     /* 98..102 */
-    u8  pad_;
+    u8  nruns[5];           /* 64..68 */
+    u8  gp0, gp1;           /* 69, 70 current player graphics incl. VDEL + reflect */
+    u8  m0_on, m1_on, bl_on;    /* 71..73 */
+    u8  col_l[5], col_r[5]; /* 74..83 colour per index for left/right half */
+    u8  vblank;             /* 84 */
+    u8  ctrlpf;             /* 85 */
+    u8  colubk;             /* 86 */
+    u8  hmove_blank;        /* 87 */
+    u8  pos_p0, pos_p1, pos_m0, pos_m1, pos_bl;     /* 88..92 */
+    u8  pad_[3];            /* 93..95 (always 0) */
+    int cur_first_visible;  /* 96 */
+    int cur_last_visible;   /* 100 */
+    u16 coll;               /* 104 collision latches */
+    u8  seg;                /* 106 segment number within the line (memo) */
+    u8  pad2_;
 
     /* frame result */
     int frame_done;         /* set when a frame completed (VSYNC) */

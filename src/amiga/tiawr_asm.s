@@ -10,6 +10,7 @@
         xref    _tia_hmove_disp
         xref    _tia_upd_obj
         xref    _tia_rep4
+        xref    _tia_memo
 
         section "CODE",code
 
@@ -364,11 +365,7 @@ update_to:
         add.l   d4,a0
         bra.s   .out
 .scr:   lea     _tia_scratch_line32,a0
-.out:   move.l  d1,-(sp)
-        move.l  d0,-(sp)
-        move.l  a0,-(sp)
-        jsr     _tia_render
-        lea     12(sp),sp
+.out:   bsr     render_memo
 .nr:    move.l  d3,d0
         sub.l   d2,d0
         add.l   d0,T_LAST(a6)
@@ -377,4 +374,91 @@ update_to:
         jsr     _tia_end_line
         bra.s   .lp
 .dn:    movem.l (sp)+,d5/a1-a3
+        rts
+
+; ---------------------------------------------------------------------
+; render(): the segment memo of tia.c in front of tia_render
+; a0 = out, d0 = x0, d1 = x1; keeps d2-d7/a1-a6
+MEMO_SEGS equ 16
+MEMO_SIZE equ 88                    ; 20 longwords, x0, x1, collisions, misses
+
+render_memo:
+        movem.l d2-d4/a1-a3,-(sp)
+        moveq   #0,d2
+        move.b  T_SEG(a6),d2
+        cmp.w   #MEMO_SEGS,d2
+        bhs     .plain
+        move.l  T_LINE(a6),d3
+        cmp.l   #FB_LINES,d3
+        bhs     .plain
+        addq.b  #1,T_SEG(a6)
+        lsl.l   #4,d3
+        add.l   d2,d3
+        mulu.w  #MEMO_SIZE,d3
+        lea     _tia_memo,a1
+        add.l   d3,a1                   ; entry of (line, segment)
+        cmp.b   80(a1),d0
+        bne.s   .miss
+        cmp.b   81(a1),d1
+        bne.s   .miss
+        lea     T_PF(a6),a2
+        move.l  a1,a3
+        moveq   #4,d4
+.cmp:   cmpm.l  (a2)+,(a3)+
+        bne.s   .miss
+        cmpm.l  (a2)+,(a3)+
+        bne.s   .miss
+        cmpm.l  (a2)+,(a3)+
+        bne.s   .miss
+        cmpm.l  (a2)+,(a3)+
+        bne.s   .miss
+        dbra    d4,.cmp
+        ; hit: the pixels are still there, add the collisions
+        clr.b   84(a1)
+        move.w  82(a1),d2
+        or.w    d2,T_COLL(a6)
+        btst    #1,T_VBLANK(a6)
+        bne.s   .done
+        move.l  T_LINE(a6),d2
+        tst.l   T_CFV(a6)
+        bpl.s   .cfv
+        move.l  d2,T_CFV(a6)
+.cfv:   move.l  d2,T_CLV(a6)
+        bra.s   .done
+.miss:  ; keeps changing: after two misses only every 16th stores it
+        addq.b  #1,84(a1)
+        bcc.s   .m1
+        st      84(a1)                  ; saturate at 255
+.m1:    move.b  84(a1),d2
+        cmp.b   #2,d2
+        bls.s   .store
+        and.b   #15,d2
+        beq.s   .store
+        st      80(a1)                  ; drawn without the memo: invalid
+        bra     .plain
+.store: lea     T_PF(a6),a2
+        move.l  a1,a3
+        moveq   #19,d4
+.cp:    move.l  (a2)+,(a3)+
+        dbra    d4,.cp
+        move.b  d0,80(a1)
+        move.b  d1,81(a1)
+        move.w  T_COLL(a6),d4
+        clr.w   T_COLL(a6)
+        move.l  a1,a3                   ; kept by tia_render
+        move.l  d1,-(sp)
+        move.l  d0,-(sp)
+        move.l  a0,-(sp)
+        jsr     _tia_render
+        lea     12(sp),sp
+        move.w  T_COLL(a6),82(a3)
+        or.w    d4,T_COLL(a6)
+.done:  movem.l (sp)+,d2-d4/a1-a3
+        rts
+.plain: move.l  d1,-(sp)
+        move.l  d0,-(sp)
+        move.l  a0,-(sp)
+        jsr     _tia_render
+        lea     12(sp),sp
+        movem.l (sp)+,d2-d4/a1-a3
         rts

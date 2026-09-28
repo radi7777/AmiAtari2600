@@ -28,11 +28,15 @@
  * Amiga raster line.
  */
 #include <string.h>
+#include <stddef.h>
 #ifdef A26_TRACE
 #include <stdio.h>
 int tia_trace;
 #endif
 #include "tia.h"
+#ifdef A26_DEBUG_MEMO
+#include <stdio.h>
+#endif
 #include "bus.h"
 
 Tia tia;
@@ -765,16 +769,64 @@ void tia_render(u8 *out, int x0, int x1);
 #include <stddef.h>
 #define TIA_OFS(f, o) typedef char tia_ofs_##f[(sizeof(void *) != 4 || offsetof(Tia, f) == (o)) ? 1 : -1]
 TIA_OFS(line, 8); TIA_OFS(pf, 16); TIA_OFS(p0_mask, 20); TIA_OFS(bl_mask, 36); TIA_OFS(runs, 40);
-TIA_OFS(prio, 60); TIA_OFS(cur_first_visible, 64); TIA_OFS(cur_last_visible, 68); TIA_OFS(coll, 72);
-TIA_OFS(nruns, 74); TIA_OFS(gp0, 79); TIA_OFS(gp1, 80); TIA_OFS(m0_on, 81); TIA_OFS(bl_on, 83);
-TIA_OFS(col_l, 84); TIA_OFS(col_r, 89); TIA_OFS(vblank, 94); TIA_OFS(ctrlpf, 95); TIA_OFS(colubk, 96);
-TIA_OFS(hmove_blank, 97); TIA_OFS(pos_p0, 98); TIA_OFS(pos_bl, 102);
-TIA_OFS(colup0, 127); TIA_OFS(colupf, 129); TIA_OFS(refp0, 130); TIA_OFS(pf0, 132); TIA_OFS(pf2, 134);
-TIA_OFS(grp0_new, 135); TIA_OFS(grp1_old, 138); TIA_OFS(enam0, 139); TIA_OFS(enabl_old, 142);
-TIA_OFS(vdelp0, 148); TIA_OFS(vdelbl, 150); TIA_OFS(resmp0, 151); TIA_OFS(resmp1, 152);
-TIA_OFS(hmp0, 143); TIA_OFS(hmbl, 147); TIA_OFS(hm_disp, 155); TIA_OFS(hm_pending, 160); TIA_OFS(hm_w, 161);
-TIA_OFS(hm_line_cc, 162); TIA_OFS(hm_v, 166); TIA_OFS(hm_lock, 171);
+TIA_OFS(prio, 60); TIA_OFS(nruns, 64); TIA_OFS(gp0, 69); TIA_OFS(gp1, 70); TIA_OFS(m0_on, 71); TIA_OFS(bl_on, 73);
+TIA_OFS(col_l, 74); TIA_OFS(col_r, 79); TIA_OFS(vblank, 84); TIA_OFS(ctrlpf, 85); TIA_OFS(colubk, 86);
+TIA_OFS(hmove_blank, 87); TIA_OFS(pos_p0, 88); TIA_OFS(pos_bl, 92); TIA_OFS(cur_first_visible, 96);
+TIA_OFS(cur_last_visible, 100); TIA_OFS(coll, 104); TIA_OFS(seg, 106);
+TIA_OFS(colup0, 131); TIA_OFS(colupf, 133); TIA_OFS(refp0, 134); TIA_OFS(pf0, 136); TIA_OFS(pf2, 138);
+TIA_OFS(grp0_new, 139); TIA_OFS(grp1_old, 142); TIA_OFS(enam0, 143); TIA_OFS(enabl_old, 146);
+TIA_OFS(vdelp0, 152); TIA_OFS(vdelbl, 154); TIA_OFS(resmp0, 155); TIA_OFS(resmp1, 156);
+TIA_OFS(hmp0, 147); TIA_OFS(hmbl, 151); TIA_OFS(hm_disp, 159); TIA_OFS(hm_pending, 164); TIA_OFS(hm_w, 165);
+TIA_OFS(hm_line_cc, 166); TIA_OFS(hm_v, 170); TIA_OFS(hm_lock, 175);
 #endif
+
+/* ---- segment memo ----
+ * A line is drawn in segments (between two TIA writes). Everything the
+ * pixels of a segment depend on is the Tia block 16..95 plus the pixel
+ * range. Segment k of line y is remembered with that block and the
+ * collisions it produced; if the same segment comes again with the same
+ * block, its pixels are still in the framebuffer (segments of a line never
+ * overlap) and only the collisions are added. */
+#define MEMO_SEGS 16
+/* the block from pf up to cur_first_visible (80 bytes with 32-bit pointers) */
+#define SIG_LONGS ((int)((offsetof(Tia, cur_first_visible) - offsetof(Tia, pf)) / 4))
+typedef struct {
+    u32 sig[SIG_LONGS];
+    u8  x0, x1;
+    u16 coll;
+    u8  miss;                       /* misses in a row: stop remembering */
+    u8  pad[3];
+} Memo;
+Memo tia_memo[TIA_FB_LINES][MEMO_SEGS];
+/* tiawr_asm.s: 20 signature longwords, x0 at 80, x1 at 81, coll at 82,
+ * miss at 84 */
+typedef char memo_layout[(sizeof(void *) != 4 || (SIG_LONGS == 20 && sizeof(Memo) == 88)) ? 1 : -1];
+u8   tia_memo_n[TIA_FB_LINES];      /* segments remembered per line */
+
+static void memo_clear(void)
+{
+    int y, k;
+    for (y = 0; y < TIA_FB_LINES; y++) {
+        for (k = 0; k < MEMO_SEGS; k++) {
+            tia_memo[y][k].x0 = 0xFF;   /* never matches */
+            tia_memo[y][k].miss = 0;
+        }
+        tia_memo_n[y] = 0;
+    }
+}
+
+/* end of a line: entries beyond the segments used this time may cover
+ * pixels that other segments have drawn since, forget them */
+static void memo_end_line(void)
+{
+    int y = tia.line, k;
+    if ((unsigned)y >= TIA_FB_LINES) return;
+    for (k = tia.seg; k < tia_memo_n[y]; k++)
+        tia_memo[y][k].x0 = 0xFF;
+    tia_memo_n[y] = tia.seg < MEMO_SEGS ? tia.seg : MEMO_SEGS;
+}
+
+static void draw(u8 *out, int x0, int x1);
 
 /* draw pixels [x0, x1) of the current line */
 static void render(int x0, int x1)
@@ -784,6 +836,53 @@ static void render(int x0, int x1)
 #ifdef A26_TIA_REFERENCE
     if (tia_use_reference) { render_ref(x0, x1); return; }
 #endif
+    if ((unsigned)tia.line < TIA_FB_LINES && tia.seg < MEMO_SEGS && tia.fb) {
+        Memo *m = &tia_memo[tia.line][tia.seg++];
+        const u32 *sig = &tia.pf;
+        u16 coll;
+        int i;
+        if (m->x0 == x0 && m->x1 == x1) {
+            for (i = 0; i < SIG_LONGS; i++)
+                if (m->sig[i] != sig[i]) break;
+            if (i == SIG_LONGS) {
+                m->miss = 0;
+#ifdef A26_DEBUG_MEMO
+                if (tia.line == 40) printf("f%lu hit  seg %d [%d,%d) vbl %02x bk %02x colubk %02x sig18=%08lx\n", (unsigned long)tia.frame_count, tia.seg - 1, x0, x1, tia.vblank, tia.col_l[0], tia.colubk, (unsigned long)sig[17]);
+#endif
+                tia.coll |= m->coll;
+                if (!(tia.vblank & 0x02)) {
+                    if (tia.cur_first_visible < 0) tia.cur_first_visible = tia.line;
+                    tia.cur_last_visible = tia.line;
+                }
+                return;
+            }
+        }
+        /* a segment that keeps changing is not worth remembering: after
+         * two misses in a row only every 16th miss stores it again */
+        if (m->miss < 255) m->miss++;
+        if (m->miss > 2 && (m->miss & 15)) {
+            m->x0 = 0xFF;               /* drawn without the memo: invalid */
+            draw(out, x0, x1);
+            return;
+        }
+        for (i = 0; i < SIG_LONGS; i++) m->sig[i] = sig[i];
+        m->x0 = (u8)x0;
+        m->x1 = (u8)x1;
+        coll = tia.coll;
+        tia.coll = 0;
+#ifdef A26_DEBUG_MEMO
+        if (tia.line == 40) printf("f%lu draw seg %d [%d,%d) vbl %02x bk %02x colubk %02x sig18=%08lx\n", (unsigned long)tia.frame_count, tia.seg - 1, x0, x1, tia.vblank, tia.col_l[0], tia.colubk, (unsigned long)sig[17]);
+#endif
+        draw(out, x0, x1);
+        m->coll = tia.coll;
+        tia.coll |= coll;
+        return;
+    }
+    draw(out, x0, x1);
+}
+
+static void draw(u8 *out, int x0, int x1)
+{
 #ifdef A26_ASM_TIA
     tia_render(out, x0, x1);
     return;
@@ -819,7 +918,9 @@ static void end_frame(void)
     tia.cur_last_visible = -1;
     tia.audio_frame_len = tia.audio_len;
     tia.audio_len = 0;
+    memo_end_line();
     tia.line = 0;
+    tia.seg = 0;
     tia.frame_count++;
     tia.frame_done = 1;
     a26_stop = 1;
@@ -889,6 +990,8 @@ update:
 static void end_line(void)
 {
     audio_line();
+    memo_end_line();
+    tia.seg = 0;
     tia.hmove_blank = 0;
     if (tia.hm_pending) apply_hmove();
     if (tia.hm_lock[0] | tia.hm_lock[1] | tia.hm_lock[2] | tia.hm_lock[3] | tia.hm_lock[4])
@@ -962,6 +1065,7 @@ void tia_reset(void)
     int i;
     if (!tables_ready) build_tables();
     memset(&tia, 0, sizeof(tia));
+    memo_clear();
     tia.fb = fb;
     tia.audio_buf = ab;
     tia.line_start_cc = tia.last_cc = a26_cycles * 3u;
