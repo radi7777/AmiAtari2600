@@ -22,6 +22,20 @@ typedef char check_tmp[(sizeof(void *) != 4 || offsetof(AsmCpu, tmp) == 58) ? 1 
 typedef char check_pc[(sizeof(void *) != 4 || offsetof(AsmCpu, pcbias) == 64) ? 1 : -1];
 typedef char check_map[(sizeof(void *) != 4 || offsetof(AsmCpu, map) == 72) ? 1 : -1];
 typedef char check_tia[(sizeof(void *) != 4 || offsetof(AsmCpu, tiawr) == 1096) ? 1 : -1];
+typedef char check_pchost[(sizeof(void *) != 4 || offsetof(AsmCpu, pchost) == 1100) ? 1 : -1];
+
+/* next code bytes at the PC of the instruction doing the current slow
+ * read (for the RIOT timer wait skip): valid only in fast code mode with
+ * the whole 5-byte window in the same page */
+const u8 *cpu_asm_next_code(u16 *pc)
+{
+    u32 p;
+    if (!actx.pcend || !actx.pchost) return NULL;
+    p = ((u32)actx.pchost - actx.pcbias) & 0xFFFF;
+    if ((p & 0xFF) < 3 || (p & 0xFF) > 0xFD) return NULL;
+    *pc = (u16)p;
+    return actx.pchost;
+}
 
 /* only cartridge accesses (and, for 3F, TIA writes) can switch banks */
 static void after_io(u32 addr)
@@ -61,6 +75,7 @@ static void cb_step(void)
     cpu.pc = (u16)actx.pc;
     cpu_set_p((u8)actx.p);
     a26_cycles = actx.cycles;
+    actx.pchost = NULL;         /* reads in C instructions: no code pointer */
     cpu_run(a26_cycles + 1);
     actx.a = cpu.a;
     actx.x = cpu.x;

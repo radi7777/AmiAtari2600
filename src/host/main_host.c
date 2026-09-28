@@ -111,6 +111,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-raw") && i + 1 < argc) raw = argv[++i];
         else if (!strcmp(argv[i], "-rawfrom") && i + 1 < argc) raw_from = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-clean")) riot_clean_start = 1;
+        else if (!strcmp(argv[i], "-noskip")) riot_skip_waits = 0;
 #ifdef A26_TRACE
         else if (!strcmp(argv[i], "-trace") && i + 1 < argc) trace_frame = atoi(argv[++i]);
 #endif

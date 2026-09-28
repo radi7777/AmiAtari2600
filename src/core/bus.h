@@ -25,6 +25,11 @@ extern u8  a26_databus;     /* last value seen on the data bus */
  * possible. May be NULL. */
 extern void (*a26_input_hook)(void);
 
+/* Code bytes at the PC following the instruction that is currently
+ * reading (NULL if unknown); *pc receives that PC. Set by the CPU core,
+ * used by the RIOT to skip timer wait loops. */
+extern const u8 *(*a26_next_code)(u16 *pc);
+
 u8   bus_read(u16 addr);
 void bus_write(u16 addr, u8 val);
 

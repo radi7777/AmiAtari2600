@@ -54,6 +54,7 @@ typedef struct {
     u32 pcend;                               /* 68: end of the fast code page, 0 = slow/invalid */
     u32 map[256];                            /* 72 */
     void (*tiawr)(u32 addr, u32 val);        /* 1096: TIA write fast path */
+    const u8 *pchost;                        /* 1100: a3 at the last slow read (see a26_next_code) */
 } AsmCpu;
 
 extern AsmCpu actx;
@@ -64,6 +65,7 @@ extern void (*cpu_asm_build_map)(AsmCpu *ctx);
 extern int  (*cpu_asm_map_changed)(void);
 
 u32  cpu_asm_run(u32 target);           /* same contract as cpu_run() */
+const u8 *cpu_asm_next_code(u16 *pc);   /* see a26_next_code in bus.h */
 
 /* implemented in cpu6507.s */
 void asmcpu_exec(AsmCpu *ctx);

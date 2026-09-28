@@ -14,6 +14,10 @@ typedef struct {
 } Cpu;
 
 extern Cpu cpu;
+/* PC after the operand of the running instruction if it has an absolute
+ * operand, else 0 (for a26_next_code: cpu.pc is only updated between
+ * instructions) */
+extern u16 cpu_pc_now;
 
 void cpu_reset(void);
 /* Run instructions until a26_cycles reaches 'target' or a stop is

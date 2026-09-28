@@ -150,7 +150,7 @@ static int load_map(const char *path)
     return 0;
 }
 static int cmp_sym(const void *a, const void *b) { const Sym *x = a, *y = b; return x->off < y->off ? -1 : x->off > y->off; }
-typedef struct { const char *name; unsigned long long n; } Row;
+typedef struct { const char *name; unsigned long long n, calls; } Row;
 static int cmp_row(const void *a, const void *b) { const Row *x = a, *y = b; return x->n < y->n ? 1 : x->n > y->n ? -1 : 0; }
 
 int main(int argc, char **argv)
@@ -202,8 +202,9 @@ int main(int argc, char **argv)
                 int j, found = -1;
                 const char *nm = k >= 0 ? syms[k].name : "?";
                 for (j = 0; j < nrows; j++) if (rows[j].name == nm) { found = j; break; }
-                if (found < 0) { rows[nrows].name = nm; rows[nrows].n = 0; found = nrows++; }
+                if (found < 0) { rows[nrows].name = nm; rows[nrows].n = 0; rows[nrows].calls = 0; found = nrows++; }
                 rows[found].n += hits[i];
+                if (k >= 0 && syms[k].off == i) rows[found].calls += hits[i];
             } else {
                 rows[nrows - 1].n += hits[i];
             }
@@ -211,7 +212,9 @@ int main(int argc, char **argv)
         }
         qsort(rows, nrows, sizeof(Row), cmp_row);
         for (i = 0; i < top && i < (unsigned)nrows; i++)
-            printf("%6.2f%%  %9.0f/frame  %s\n", 100.0 * rows[i].n / sum, (double)rows[i].n / frames, rows[i].name);
+            printf("%6.2f%%  %9.0f/frame  %6.0f calls  %5.0f/call  %s\n", 100.0 * rows[i].n / sum,
+                   (double)rows[i].n / frames, (double)rows[i].calls / frames,
+                   rows[i].calls ? (double)rows[i].n / rows[i].calls : 0.0, rows[i].name);
     }
     return 0;
 }

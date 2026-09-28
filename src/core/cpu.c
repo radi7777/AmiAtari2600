@@ -42,6 +42,8 @@ void cpu_set_p(u8 p)
     fC = p & 0x01;
 }
 
+u16 cpu_pc_now;
+
 void cpu_reset(void)
 {
     cpu.a = cpu.x = cpu.y = 0;
@@ -116,7 +118,7 @@ static u8 op_ror(u8 v) { u8 c = fC ? 0x80 : 0; fC = v & 0x01; v = (u8)((v >> 1) 
 #define EA_ZP()    ea = RD(pc++)
 #define EA_ZPX()   ea = (u8)(RD(pc++) + cpu.x); CYC(1)
 #define EA_ZPY()   ea = (u8)(RD(pc++) + cpu.y); CYC(1)
-#define EA_ABS()   ea = RD(pc); ea |= (u16)(RD(pc + 1) << 8); pc += 2
+#define EA_ABS()   ea = RD(pc); ea |= (u16)(RD(pc + 1) << 8); pc += 2; cpu_pc_now = pc
 /* indexed read: penalty cycle only on page cross */
 #define EA_ABXR()  EA_ABS(); t = ea; ea = (u16)(ea + cpu.x); if ((t ^ ea) & 0xFF00) CYC(1)
 #define EA_ABYR()  EA_ABS(); t = ea; ea = (u16)(ea + cpu.y); if ((t ^ ea) & 0xFF00) CYC(1)
@@ -155,6 +157,7 @@ u32 cpu_run(u32 target)
 
     while ((s32)(a26_cycles - target) < 0 && !a26_stop) {
         op = RD(pc++);
+        cpu_pc_now = 0;         /* only absolute operands publish the PC */
         count++;
         switch (op) {
         /* ---------------- loads / stores ---------------- */

@@ -50,6 +50,7 @@ C_PCEND  equ 68          ; end of the current fast code page, 0 = slow mode
 C_TIADIR equ 63          ; byte: TIA writes may use C_TIAWR
 C_MAP    equ 72
 C_TIAWR  equ 1096        ; void tiawr(u32 addr, u32 val)
+C_PCHOST equ 1100        ; a3 at slow reads (RIOT timer wait skip)
 
 ; ======================================================================
 ; macros
@@ -424,6 +425,7 @@ slow_read:
         rts
 .call:
         move.l  d5,C_CYC(a4)
+        move.l  a3,C_PCHOST(a4)
         move.l  d0,-(sp)
         move.l  C_RD(a4),a0
         jsr     (a0)

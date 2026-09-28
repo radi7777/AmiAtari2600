@@ -32,6 +32,8 @@ extern Riot riot;
 /* 1 = power on with cleared RAM and INTIM = 0 (reproducible comparisons
  * with other emulators); 0 = fixed pseudo-random pattern */
 extern int riot_clean_start;
+/* 1 = skip timer wait loops (exact, see riot.c) */
+extern int riot_skip_waits;
 
 void riot_reset(void);
 u8   riot_read(u16 addr);

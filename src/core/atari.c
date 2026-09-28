@@ -6,6 +6,7 @@
  * with hysteresis, so single odd frames (e.g. during bank switches or
  * loading screens) don't flip the Amiga display mode back and forth.
  */
+#include <stddef.h>
 #include "atari.h"
 #include "bus.h"
 #include "cpu.h"
@@ -33,6 +34,16 @@ static void asm_tia_write(u32 addr, u32 val)
 #endif
 
 A26State a26;
+
+/* C core: code bytes at cpu.pc from the cartridge segments (no side
+ * effects); NULL outside ROM or across a 1K segment border */
+static const u8 *c_next_code(u16 *pc)
+{
+    u16 p = cpu_pc_now;
+    if (!(p & 0x1000) || (p & 0x3FF) < 3 || (p & 0x3FF) > 0x3FD) return NULL;
+    *pc = p;
+    return cart.seg[(p >> 10) & 3] + (p & 0x3FF);
+}
 
 /* u32 array: the TIA writes whole playfield blocks as aligned longwords */
 static u32 framebuffer32[TIA_FB_LINES * TIA_WIDTH / 4];
@@ -80,6 +91,11 @@ void a26_reset(void)
 #endif
     cpu_asm_build_map = build_asm_map;
     cpu_asm_map_changed = cart_asm_map_changed;
+#endif
+#ifdef A26_ASM_CPU
+    a26_next_code = cpu_asm_next_code;
+#else
+    a26_next_code = c_next_code;
 #endif
     a26.lines_avg = (a26.region == REGION_PAL) ? 312 : 262;
     a26.frames = 0;

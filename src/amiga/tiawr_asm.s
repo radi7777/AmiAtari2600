@@ -49,7 +49,11 @@ _tia_write_asm:
         dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
         dc.w    .c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt,.c-.jt
 
-.c:     ; everything else: C
+.c:     ; everything else: C. Catching up to the write cycle first is
+        ; always correct (the C code draws exactly the same pixels) and
+        ; cheaper here.
+        move.l  d7,d0
+        bsr     update_to
         move.l  d5,-(sp)
         move.l  4+44+4(sp),-(sp)
         jsr     _tia_write

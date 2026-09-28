@@ -125,8 +125,8 @@ _tia_render:
 
 ; ---------------------------------------------------------------------
 ; playfield + background for out[d0..d1); a0 = out, a6 = tia
-; colour of pixel x: block b = x/4; bit = pf bit b (b < 20), else
-; pf bit b-20 (normal) or 39-b (reflected); x < 80: col_l[PF], else col_r
+; colour of block b = x/4: bit = pf bit b (b < 20), else pf bit b-20
+; (normal) or 39-b (reflected); set: col_l[PF] (b < 20) / col_r[PF]
 playfield:
         move.l  T_PF(a6),d2
         moveq   #0,d3
@@ -138,15 +138,27 @@ playfield:
         and.w   #1,d6                   ; reflect
         move.l  d1,a5                   ; x1
 
-        ; unaligned head, pixel by pixel
-.hd:    cmp.l   a5,d0
-        bge     .pfdone
-        move.l  d0,d4
-        and.w   #3,d4
+        ; unaligned head: part of one block
+        move.l  d0,d5
+        and.w   #3,d5
         beq.s   .blocks
-        bsr     pfpix
-        addq.l  #1,d0
-        bra.s   .hd
+        move.l  d0,d1
+        lsr.l   #2,d1
+        bsr     blkcol                  ; -> d4.b
+        lea     (a0,d0.l),a1
+        neg.w   d5
+        addq.w  #4,d5                   ; pixels up to the block end
+        move.l  a5,d1
+        sub.l   d0,d1                   ; pixels left
+        cmp.l   d1,d5
+        ble.s   .hc
+        move.l  d1,d5
+.hc:    add.l   d5,d0
+        subq.w  #1,d5
+.hw:    move.b  d4,(a1)+
+        dbra    d5,.hw
+        cmp.l   a5,d0
+        bge     .pfdone
 
 .blocks:
         ; replicate the three colours: d3 = background, d4 = left, d5 = right
@@ -235,40 +247,40 @@ playfield:
 .fon:   move.l  d5,(a1)+
         dbra    d0,.fb
 .rend:  move.l  a5,d7
-        lsr.l   #2,d7                   ; last block handled
-.tailp: move.l  d7,d0
-        lsl.l   #2,d0
-        moveq   #0,d3
+        lsr.l   #2,d7                   ; last (partial) block
+.tailp: ; partial last block: pixels last*4 .. x1-1
+        move.l  a5,d5
+        and.w   #3,d5
+        beq.s   .pfdone
+        move.l  d7,d1
         move.b  T_COLUBK(a6),d3
-.tl:    cmp.l   a5,d0
-        bge.s   .pfdone
-        bsr     pfpix
-        addq.l  #1,d0
-        bra.s   .tl
+        bsr     blkcol
+        lsl.l   #2,d7
+        lea     (a0,d7.l),a1
+        subq.w  #1,d5
+.tw:    move.b  d4,(a1)+
+        dbra    d5,.tw
 .pfdone:
         rts
 
-; one playfield pixel: d0 = x, d2 = pf, d6 = reflect, d3.b = background
-; trashes d1
-pfpix:
-        move.l  d0,d1
-        lsr.l   #2,d1                   ; block
+; colour of playfield block d1 -> d4.b (d2 = pf, d6 = reflect, d3.b = background)
+blkcol:
         cmp.w   #20,d1
-        blt.s   .t
+        blt.s   .l
         sub.w   #20,d1
         tst.w   d6
-        beq.s   .t
+        beq.s   .r
         neg.w   d1
         add.w   #19,d1                  ; 39 - b = 19 - (b - 20)
-.t:     btst    d1,d2
+.r:     btst    d1,d2
         beq.s   .bk
-        cmp.w   #80,d0
-        bge.s   .r
-        move.b  T_COLL_L+C_PF(a6),(a0,d0.l)
+        move.b  T_COLR+C_PF(a6),d4
         rts
-.r:     move.b  T_COLR+C_PF(a6),(a0,d0.l)
+.l:     btst    d1,d2
+        beq.s   .bk
+        move.b  T_COLL_L+C_PF(a6),d4
         rts
-.bk:    move.b  d3,(a0,d0.l)
+.bk:    move.b  d3,d4
         rts
 
 ; ---------------------------------------------------------------------
