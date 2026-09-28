@@ -380,7 +380,11 @@ update_to:
 ; render(): the segment memo of tia.c in front of tia_render
 ; a0 = out, d0 = x0, d1 = x1; keeps d2-d7/a1-a6
 MEMO_SEGS equ 16
-MEMO_SIZE equ 88                    ; 20 longwords, x0, x1, collisions, misses
+MEMO_SIZE equ 52                    ; 11 longwords, x0, x1, collisions, misses
+M_X0      equ 44
+M_X1      equ 45
+M_COLL    equ 46
+M_MISS    equ 48
 
 render_memo:
         movem.l d2-d4/a1-a3,-(sp)
@@ -397,25 +401,19 @@ render_memo:
         mulu.w  #MEMO_SIZE,d3
         lea     _tia_memo,a1
         add.l   d3,a1                   ; entry of (line, segment)
-        cmp.b   80(a1),d0
+        cmp.b   M_X0(a1),d0
         bne.s   .miss
-        cmp.b   81(a1),d1
+        cmp.b   M_X1(a1),d1
         bne.s   .miss
         lea     T_PF(a6),a2
         move.l  a1,a3
-        moveq   #4,d4
-.cmp:   cmpm.l  (a2)+,(a3)+
-        bne.s   .miss
+        rept    11
         cmpm.l  (a2)+,(a3)+
         bne.s   .miss
-        cmpm.l  (a2)+,(a3)+
-        bne.s   .miss
-        cmpm.l  (a2)+,(a3)+
-        bne.s   .miss
-        dbra    d4,.cmp
+        endr
         ; hit: the pixels are still there, add the collisions
-        clr.b   84(a1)
-        move.w  82(a1),d2
+        clr.b   M_MISS(a1)
+        move.w  M_COLL(a1),d2
         or.w    d2,T_COLL(a6)
         btst    #1,T_VBLANK(a6)
         bne.s   .done
@@ -426,23 +424,23 @@ render_memo:
 .cfv:   move.l  d2,T_CLV(a6)
         bra.s   .done
 .miss:  ; keeps changing: after two misses only every 16th stores it
-        addq.b  #1,84(a1)
+        addq.b  #1,M_MISS(a1)
         bcc.s   .m1
-        st      84(a1)                  ; saturate at 255
-.m1:    move.b  84(a1),d2
+        st      M_MISS(a1)              ; saturate at 255
+.m1:    move.b  M_MISS(a1),d2
         cmp.b   #2,d2
         bls.s   .store
         and.b   #15,d2
         beq.s   .store
-        st      80(a1)                  ; drawn without the memo: invalid
+        st      M_X0(a1)                ; drawn without the memo: invalid
         bra     .plain
 .store: lea     T_PF(a6),a2
         move.l  a1,a3
-        moveq   #19,d4
-.cp:    move.l  (a2)+,(a3)+
-        dbra    d4,.cp
-        move.b  d0,80(a1)
-        move.b  d1,81(a1)
+        rept    11
+        move.l  (a2)+,(a3)+
+        endr
+        move.b  d0,M_X0(a1)
+        move.b  d1,M_X1(a1)
         move.w  T_COLL(a6),d4
         clr.w   T_COLL(a6)
         move.l  a1,a3                   ; kept by tia_render
@@ -451,7 +449,7 @@ render_memo:
         move.l  a0,-(sp)
         jsr     _tia_render
         lea     12(sp),sp
-        move.w  T_COLL(a6),82(a3)
+        move.w  T_COLL(a6),M_COLL(a3)
         or.w    d4,T_COLL(a6)
 .done:  movem.l (sp)+,d2-d4/a1-a3
         rts

@@ -8,24 +8,24 @@ T_P1M     equ 24
 T_M0M     equ 28
 T_M1M     equ 32
 T_BLM     equ 36
-T_RUNS    equ 40
-T_PRIO    equ 60
+T_RUNS    equ 60
+T_PRIO    equ 80
 T_CFV     equ 96
 T_CLV     equ 100
 T_COLL    equ 104
-T_NRUNS   equ 64
-T_GP0     equ 69
-T_GP1     equ 70
-T_M0ON    equ 71
-T_M1ON    equ 72
-T_BLON    equ 73
-T_COLL_L  equ 74
-T_COLR    equ 79
-T_VBLANK  equ 84
-T_CTRLPF  equ 85
-T_COLUBK  equ 86
-T_HMB     equ 87
-T_POS     equ 88                    ; P0, P1, M0, M1, BL
+T_NRUNS   equ 84
+T_GP0     equ 40
+T_GP1     equ 41
+T_M0ON    equ 42
+T_M1ON    equ 43
+T_BLON    equ 44
+T_COLL_L  equ 45
+T_COLR    equ 50
+T_VBLANK  equ 55
+T_CTRLPF  equ 56
+T_COLUBK  equ 89
+T_HMB     equ 57
+T_POS     equ 90                    ; P0, P1, M0, M1, BL
 
 C_CYC     equ 24                    ; AsmCpu (cpu_asm.h)
 C_TARGET  equ 28

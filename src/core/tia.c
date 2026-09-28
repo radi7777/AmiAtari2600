@@ -551,6 +551,17 @@ static u8 audio_phase1(TiaAudioChannel *c)
 static u8 audio_channel_line(TiaAudioChannel *c)
 {
     u8 s;
+    /* Fast path: the channel state only changes in ticks where the divider
+     * fires. If it does not fire in either tick (and no update from the
+     * previous tick is pending), only the divider counts and the output
+     * stays the same - exactly what the full model below computes. */
+    if (!c->clk_en && c->div != c->audf) {
+        u8 d1 = (u8)(c->div == 0x1F ? 0 : c->div + 1);
+        if (d1 != c->audf) {
+            c->div = (u8)(d1 == 0x1F ? 0 : d1 + 1);
+            return (u8)((c->pulse & 0x01) * c->audv * 2);
+        }
+    }
     audio_phase0(c);
     s = audio_phase1(c);
     audio_phase0(c);
@@ -768,11 +779,11 @@ static void stamp_object(u8 *out, int obj, int pos, int x0, int x1)
 void tia_render(u8 *out, int x0, int x1);
 #include <stddef.h>
 #define TIA_OFS(f, o) typedef char tia_ofs_##f[(sizeof(void *) != 4 || offsetof(Tia, f) == (o)) ? 1 : -1]
-TIA_OFS(line, 8); TIA_OFS(pf, 16); TIA_OFS(p0_mask, 20); TIA_OFS(bl_mask, 36); TIA_OFS(runs, 40);
-TIA_OFS(prio, 60); TIA_OFS(nruns, 64); TIA_OFS(gp0, 69); TIA_OFS(gp1, 70); TIA_OFS(m0_on, 71); TIA_OFS(bl_on, 73);
-TIA_OFS(col_l, 74); TIA_OFS(col_r, 79); TIA_OFS(vblank, 84); TIA_OFS(ctrlpf, 85); TIA_OFS(colubk, 86);
-TIA_OFS(hmove_blank, 87); TIA_OFS(pos_p0, 88); TIA_OFS(pos_bl, 92); TIA_OFS(cur_first_visible, 96);
-TIA_OFS(cur_last_visible, 100); TIA_OFS(coll, 104); TIA_OFS(seg, 106);
+TIA_OFS(line, 8); TIA_OFS(pf, 16); TIA_OFS(p0_mask, 20); TIA_OFS(bl_mask, 36); TIA_OFS(gp0, 40);
+TIA_OFS(gp1, 41); TIA_OFS(m0_on, 42); TIA_OFS(bl_on, 44); TIA_OFS(col_l, 45); TIA_OFS(col_r, 50);
+TIA_OFS(vblank, 55); TIA_OFS(ctrlpf, 56); TIA_OFS(hmove_blank, 57); TIA_OFS(runs, 60); TIA_OFS(prio, 80);
+TIA_OFS(nruns, 84); TIA_OFS(colubk, 89); TIA_OFS(pos_p0, 90); TIA_OFS(pos_bl, 94);
+TIA_OFS(cur_first_visible, 96); TIA_OFS(cur_last_visible, 100); TIA_OFS(coll, 104); TIA_OFS(seg, 106);
 TIA_OFS(colup0, 131); TIA_OFS(colupf, 133); TIA_OFS(refp0, 134); TIA_OFS(pf0, 136); TIA_OFS(pf2, 138);
 TIA_OFS(grp0_new, 139); TIA_OFS(grp1_old, 142); TIA_OFS(enam0, 143); TIA_OFS(enabl_old, 146);
 TIA_OFS(vdelp0, 152); TIA_OFS(vdelbl, 154); TIA_OFS(resmp0, 155); TIA_OFS(resmp1, 156);
@@ -782,14 +793,14 @@ TIA_OFS(hm_line_cc, 166); TIA_OFS(hm_v, 170); TIA_OFS(hm_lock, 175);
 
 /* ---- segment memo ----
  * A line is drawn in segments (between two TIA writes). Everything the
- * pixels of a segment depend on is the Tia block 16..95 plus the pixel
+ * pixels of a segment depend on is the Tia block 16..59 plus the pixel
  * range. Segment k of line y is remembered with that block and the
  * collisions it produced; if the same segment comes again with the same
  * block, its pixels are still in the framebuffer (segments of a line never
  * overlap) and only the collisions are added. */
 #define MEMO_SEGS 16
-/* the block from pf up to cur_first_visible (80 bytes with 32-bit pointers) */
-#define SIG_LONGS ((int)((offsetof(Tia, cur_first_visible) - offsetof(Tia, pf)) / 4))
+/* the block from pf up to runs (44 bytes with 32-bit pointers) */
+#define SIG_LONGS ((int)((offsetof(Tia, runs) - offsetof(Tia, pf)) / 4))
 typedef struct {
     u32 sig[SIG_LONGS];
     u8  x0, x1;
@@ -798,9 +809,9 @@ typedef struct {
     u8  pad[3];
 } Memo;
 Memo tia_memo[TIA_FB_LINES][MEMO_SEGS];
-/* tiawr_asm.s: 20 signature longwords, x0 at 80, x1 at 81, coll at 82,
- * miss at 84 */
-typedef char memo_layout[(sizeof(void *) != 4 || (SIG_LONGS == 20 && sizeof(Memo) == 88)) ? 1 : -1];
+/* tiawr_asm.s: 11 signature longwords, x0 at 44, x1 at 45, coll at 46,
+ * miss at 48 */
+typedef char memo_layout[(sizeof(void *) != 4 || (SIG_LONGS == 11 && sizeof(Memo) == 52)) ? 1 : -1];
 u8   tia_memo_n[TIA_FB_LINES];      /* segments remembered per line */
 
 static void memo_clear(void)
