@@ -69,6 +69,11 @@ fi
 echo "== Amiga video conversion (copper palette + c2p, simulated)"
 if $VIDTEST $B/bars_ntsc.bin; then ok "vidconv"; else fail "vidconv"; fi
 
+if [ -x $B/snapimg_test ]; then
+    echo "== GUI screenshot cache"
+    if $B/snapimg_test $B/snapimg_test.a26i >/dev/null; then ok "snapimg"; else fail "snapimg"; fi
+fi
+
 if [ -d roms ]; then
     echo "== Local ROMs (roms/*.bin, not in git)"
     for r in roms/*.bin roms/*.a26; do

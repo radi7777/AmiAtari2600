@@ -37,6 +37,7 @@
 
 #include "muistubs.h"
 #include "gamedb.h"
+#include "snapimg.h"
 #include "../core/cart.h"
 
 #define VERSION "0.1"
@@ -129,32 +130,80 @@ static struct Screen *own_screen;
 enum { ID_SELECT = 1, ID_START, ID_FILTER, ID_SWITCH, ID_ROMDIR, ID_DB, ID_SNAPS };
 
 /* ---------------------------------------------------------------------
- * screenshot area: a small custom class drawing a datatype picture
- * (remapped to the screen) in a 320 x 240 area. The libretro snaps come in
- * different sizes (320 x 210..250, 512 x 384) with uneven borders, so the
- * border (the colour of the top left pixel) is cut off and the rest is
- * scaled to fit, keeping its aspect, and centred.
+ * screenshots: converted once from the downloaded PNG into a small cache
+ * file (snapimg.c: border cut off, at most 320 x 240, palette + packed
+ * indices), so browsing the list never decodes a PNG again.
+ */
+
+/* WritePixelArray() of cybergraphics.library (RTG screens), if present */
+static struct Library *CyberGfxBase;
+ULONG __WritePixelArray(__reg("a6") struct Library *, __reg("a0") APTR src,
+                        __reg("d0") UWORD sx, __reg("d1") UWORD sy, __reg("d2") UWORD mod,
+                        __reg("a1") struct RastPort *rp, __reg("d3") UWORD dx,
+                        __reg("d4") UWORD dy, __reg("d5") UWORD w, __reg("d6") UWORD h,
+                        __reg("d7") UBYTE fmt) = "\tjsr\t-126(a6)";
+#define RECTFMT_RGB 0
+
+static int dt_getrow(void *ctx, int y, unsigned char *rgb)
+{
+    Object *dto = (Object *)((ULONG *)ctx)[0];
+    ULONG w = ((ULONG *)ctx)[1];
+    return DoMethod(dto, PDTM_READPIXELARRAY, (ULONG)rgb, PBPAFMT_RGB, w * 3, 0, y, w, 1) ? 0 : -1;
+}
+
+/* PNG (any datatype picture) -> cache file; returns 0 on success */
+static int snap_convert(const char *png, const char *cache)
+{
+    static struct TagItem tags[] = {
+        { DTA_GroupID, GID_PICTURE }, { PDTA_Remap, FALSE }, { PDTA_DestMode, PMODE_V43 },
+        { TAG_DONE, 0 }
+    };
+    struct BitMapHeader *bmh = NULL;
+    struct TagItem gt[2];
+    Object *dto;
+    SnapImg im;
+    ULONG ctx[2];
+    int err = -1;
+    trace("convert %s", png);
+    dto = NewDTObjectA((APTR)png, tags);
+    if (!dto) return -1;
+    gt[0].ti_Tag = PDTA_BitMapHeader; gt[0].ti_Data = (ULONG)&bmh;
+    gt[1].ti_Tag = TAG_DONE;
+    GetDTAttrsA(dto, gt);
+    if (bmh) {
+        ctx[0] = (ULONG)dto;
+        ctx[1] = bmh->bmh_Width;
+        if (!snapimg_from_rgb(&im, bmh->bmh_Width, bmh->bmh_Height, dt_getrow, ctx)) {
+            err = snapimg_save(cache, &im);
+            snapimg_free(&im);
+        }
+    }
+    DisposeDTObject(dto);
+    if (err) DeleteFile((STRPTR)cache);
+    trace(err ? "convert failed" : "convert ok", NULL);
+    return err;
+}
+
+/* ---------------------------------------------------------------------
+ * screenshot area: a small custom class showing a cached screenshot
+ * (MUIA_A26Img_File = .a26i file) scaled to the area, keeping its aspect
+ * (also for screens with non-square pixels), centred on black.
  */
 #define MUIA_A26Img_File (TAG_USER | 0x26000001)
 
 struct ImgData {
-    Object *dto;
-    struct BitMap *bm;
-    LONG w, h;
-    LONG cx, cy, cw, ch;        /* content without border */
-    struct BitMap *sbm;         /* scaled content */
+    SnapImg si;                 /* the picture, si.pix == NULL: none */
+    struct BitMap *sbm;         /* scaled for the screen */
     LONG sw, sh, aw, ah;        /* its size, for an area of aw x ah */
     LONG black;                 /* pen for the area background, -1 if none */
     LONG rx, ry;                /* pixel aspect of the screen (display ticks) */
     int setup;
     int shown;                  /* between MUIM_Show and MUIM_Hide */
-    /* screens with a colour table: our own remapping (see img_scale) */
-    int clut;
+    int clut;                   /* screen with a colour table (<= 8 planes) */
     struct ColorMap *cm;
     struct BitMap *scrbm;
-    int npens;
-    LONG pen[64];
-    ULONG rgb[64];
+    int npens;                  /* pens obtained for the palette */
+    LONG pen[256];              /* palette index -> pen, -1 not yet */
     char file[256];
 };
 
@@ -162,182 +211,95 @@ static struct MUI_CustomClass *img_class;
 
 static void img_free_scaled(struct ImgData *d)
 {
+    int i;
     if (d->sbm) { WaitBlit(); FreeBitMap(d->sbm); }
     d->sbm = NULL;
-    while (d->npens > 0) ReleasePen(d->cm, d->pen[--d->npens]);
+    if (d->npens) {
+        for (i = 0; i < 256; i++)
+            if (d->pen[i] >= 0) ReleasePen(d->cm, d->pen[i]);
+        d->npens = 0;
+    }
+    for (i = 0; i < 256; i++) d->pen[i] = -1;
 }
 
 static void img_free(struct ImgData *d)
 {
     img_free_scaled(d);
-    if (d->dto) DisposeDTObject(d->dto);
-    d->dto = NULL;
-    d->bm = NULL;
+    snapimg_free(&d->si);
 }
 
-/* is the pixel (r,g,b) different from the border colour? */
-static int differs(const UBYTE *p, const UBYTE *b)
-{
-    int dr = p[0] - b[0], dg = p[1] - b[1], db = p[2] - b[2];
-    return dr * dr + dg * dg + db * db > 3 * 24 * 24;
-}
-
-/* bounding box of everything that is not border; whole picture if the
- * datatype cannot deliver RGB pixels */
-static void img_bounds(struct ImgData *d)
-{
-    UBYTE *row, border[3];
-    LONG x, y, x0 = d->w, x1 = -1, y0 = d->h, y1 = -1;
-    d->cx = d->cy = 0; d->cw = d->w; d->ch = d->h;
-    if (d->w <= 0 || d->h <= 0) return;
-    row = (UBYTE *)AllocVec(d->w * 3, MEMF_ANY);
-    if (!row) return;
-    for (y = 0; y < d->h; y++) {
-        if (!DoMethod(d->dto, PDTM_READPIXELARRAY, (ULONG)row, PBPAFMT_RGB,
-                      d->w * 3, 0, y, d->w, 1))
-            break;
-        if (y == 0) { border[0] = row[0]; border[1] = row[1]; border[2] = row[2]; }
-        for (x = 0; x < d->w; x++)
-            if (differs(row + x * 3, border)) {
-                if (x < x0) x0 = x;
-                if (x > x1) x1 = x;
-                if (y < y0) y0 = y;
-                y1 = y;
-            }
-    }
-    FreeVec(row);
-    if (y < d->h || x1 < x0) return;     /* no pixels or all border */
-    d->cx = x0; d->cy = y0; d->cw = x1 - x0 + 1; d->ch = y1 - y0 + 1;
-    {
-        char t[48];
-        sprintf(t, "%ld,%ld %ldx%ld", d->cx, d->cy, d->cw, d->ch);
-        trace("image: content %s", t);
-    }
-}
-
-/* pen for an RGB colour of the picture (cached; up to 64 colours) */
-static LONG img_pen(struct ImgData *d, ULONG rgb)
+/* pen for palette entry i (obtained on first use) */
+static UBYTE img_pen(struct ImgData *d, int i)
 {
     static struct TagItem obp[] = { { OBP_Precision, PRECISION_IMAGE }, { TAG_DONE, 0 } };
-    int i;
-    for (i = 0; i < d->npens; i++)
-        if (d->rgb[i] == rgb) return d->pen[i];
-    if (d->npens == 64) return d->pen[0];
-    d->rgb[d->npens] = rgb;
-    d->pen[d->npens] = ObtainBestPenA(d->cm, ((rgb >> 16) & 255) * 0x01010101UL,
-                                      ((rgb >> 8) & 255) * 0x01010101UL,
-                                      (rgb & 255) * 0x01010101UL, obp);
-    return d->pen[d->npens++];
+    if (d->pen[i] < 0) {
+        const UBYTE *c = d->si.pal + i * 3;
+        d->pen[i] = ObtainBestPenA(d->cm, c[0] * 0x01010101UL, c[1] * 0x01010101UL,
+                                   c[2] * 0x01010101UL, obp);
+        d->npens++;
+    }
+    return (UBYTE)d->pen[i];
 }
 
-/* colour table screens: scale and map every colour to the nearest pen
- * ourselves, as picture.datatype dithers the few colours into noise */
-static void img_scale_clut(struct ImgData *d, LONG dw, LONG dh)
+/* picture scaled to fit aw x ah (nearest neighbour on the indices) */
+static void img_scale(struct ImgData *d, LONG aw, LONG ah)
 {
-    UBYTE *row, *buf;
     struct RastPort rp;
-    LONG x, y, sy, prev = -1;
+    UBYTE *buf;
+    LONG dw, dh, x, y, rgb;
+    if (d->sbm && d->aw == aw && d->ah == ah) return;
+    img_free_scaled(d);
+    d->aw = aw; d->ah = ah;
+    /* the snaps have square pixels; the screen's may not (hires PAL:
+     * twice as high as wide) */
+    dh = ah;
+    dw = d->si.w * ah * d->ry / (d->si.h * d->rx);
+    if (dw > aw) {
+        dw = aw;
+        dh = d->si.h * aw * d->rx / (d->si.w * d->ry);
+    }
+    if (dw < 1 || dh < 1) return;
+    rgb = !d->clut && CyberGfxBase;
+    buf = (UBYTE *)AllocVec(dw * dh * (rgb ? 3 : 1), MEMF_ANY);
     d->sbm = AllocBitMap(dw, dh, GetBitMapAttr(d->scrbm, BMA_DEPTH), BMF_CLEAR, d->scrbm);
-    row = (UBYTE *)AllocVec(d->cw * 3, MEMF_ANY);
-    buf = (UBYTE *)AllocVec(dw * dh, MEMF_ANY);
-    if (d->sbm && row && buf) {
+    if (buf && d->sbm) {
+        UBYTE *o = buf;
         for (y = 0; y < dh; y++) {
-            sy = d->cy + y * d->ch / dh;
-            if (sy != prev) {
-                DoMethod(d->dto, PDTM_READPIXELARRAY, (ULONG)row, PBPAFMT_RGB,
-                         d->cw * 3, d->cx, sy, d->cw, 1);
-                prev = sy;
-            }
+            const UBYTE *src = d->si.pix + (y * d->si.h / dh) * d->si.w;
             for (x = 0; x < dw; x++) {
-                const UBYTE *p = row + (x * d->cw / dw) * 3;
-                buf[y * dw + x] = (UBYTE)img_pen(d, ((ULONG)p[0] << 16) | ((ULONG)p[1] << 8) | p[2]);
+                int i = src[x * d->si.w / dw];
+                if (rgb) {
+                    const UBYTE *c = d->si.pal + i * 3;
+                    *o++ = c[0]; *o++ = c[1]; *o++ = c[2];
+                } else {
+                    *o++ = img_pen(d, i);
+                }
             }
         }
         InitRastPort(&rp);
         rp.BitMap = d->sbm;
-        WriteChunkyPixels(&rp, 0, 0, dw - 1, dh - 1, buf, dw);
+        if (rgb)
+            __WritePixelArray(CyberGfxBase, buf, 0, 0, dw * 3, &rp, 0, 0, dw, dh, RECTFMT_RGB);
+        else
+            WriteChunkyPixels(&rp, 0, 0, dw - 1, dh - 1, buf, dw);
         d->sw = dw;
         d->sh = dh;
     } else if (d->sbm) {
         FreeBitMap(d->sbm);
         d->sbm = NULL;
     }
-    if (row) FreeVec(row);
     if (buf) FreeVec(buf);
 }
 
-/* content scaled to fit aw x ah */
-static void img_scale(struct ImgData *d, LONG aw, LONG ah)
+static void img_load(struct ImgData *d)
 {
-    struct BitScaleArgs bsa;
-    LONG dw, dh;
-    if (d->sbm && d->aw == aw && d->ah == ah) return;
-    img_free_scaled(d);
-    d->aw = aw; d->ah = ah;
-    /* the snaps have square pixels; the screen's may not be (hires PAL:
-     * twice as high as wide) */
-    dh = ah;
-    dw = d->cw * ah * d->ry / (d->ch * d->rx);
-    if (dw > aw) {
-        dw = aw;
-        dh = d->ch * aw * d->rx / (d->cw * d->ry);
-    }
-    if (dw < 1 || dh < 1) return;
-    if (d->clut) {
-        img_scale_clut(d, dw, dh);
-        return;
-    }
-    d->sbm = AllocBitMap(dw, dh, GetBitMapAttr(d->bm, BMA_DEPTH), BMF_CLEAR, d->bm);
-    if (!d->sbm) return;
-    memset(&bsa, 0, sizeof(bsa));
-    bsa.bsa_SrcX = d->cx;        bsa.bsa_SrcY = d->cy;
-    bsa.bsa_SrcWidth = d->cw;    bsa.bsa_SrcHeight = d->ch;
-    bsa.bsa_XSrcFactor = d->cw;  bsa.bsa_YSrcFactor = d->ch;
-    bsa.bsa_XDestFactor = dw;    bsa.bsa_YDestFactor = dh;
-    bsa.bsa_SrcBitMap = d->bm;   bsa.bsa_DestBitMap = d->sbm;
-    BitMapScale(&bsa);
-    d->sw = bsa.bsa_DestWidth;   d->sh = bsa.bsa_DestHeight;
-    {
-        char t[24];
-        sprintf(t, "%ldx%ld", d->sw, d->sh);
-        trace("image: scaled %s", t);
-    }
-}
-
-static void img_load(Object *obj, struct ImgData *d)
-{
-    struct TagItem tags[8];
     img_free(d);
-    if (!d->setup || !d->file[0]) return;
-    tags[0].ti_Tag = DTA_GroupID;       tags[0].ti_Data = GID_PICTURE;
-    tags[1].ti_Tag = PDTA_Remap;        tags[1].ti_Data = !d->clut;
-    tags[2].ti_Tag = PDTA_Screen;       tags[2].ti_Data = (ULONG)_screen(obj);
-    tags[3].ti_Tag = PDTA_DestMode;     tags[3].ti_Data = PMODE_V43;
-    tags[4].ti_Tag = PDTA_UseFriendBitMap; tags[4].ti_Data = TRUE;
-    tags[5].ti_Tag = OBP_Precision;     tags[5].ti_Data = PRECISION_IMAGE;
-    tags[6].ti_Tag = TAG_DONE;
-    trace("image: load %s", d->file);
-    d->dto = NewDTObjectA((APTR)d->file, tags);
-    trace("image: object %s", d->dto ? "ok" : "failed");
-    if (!d->dto) return;
-    if (DoMethod(d->dto, DTM_PROCLAYOUT, NULL, 1)) {
-        struct BitMapHeader *bmh = NULL;
-        struct TagItem gt[3];
-        gt[0].ti_Tag = PDTA_DestBitMap;  gt[0].ti_Data = (ULONG)&d->bm;
-        gt[1].ti_Tag = PDTA_BitMapHeader; gt[1].ti_Data = (ULONG)&bmh;
-        gt[2].ti_Tag = TAG_DONE;
-        GetDTAttrsA(d->dto, gt);
-        if (bmh) { d->w = bmh->bmh_Width; d->h = bmh->bmh_Height; }
-        else d->bm = NULL;
-        if (d->clut) d->bm = bmh ? d->scrbm : NULL;     /* only a marker */
-    }
-    trace("image: bitmap %s", d->bm ? "ok" : "none");
-    if (!d->bm) { img_free(d); return; }
-    img_bounds(d);
+    if (!d->file[0]) return;
+    if (snapimg_load(d->file, &d->si)) trace("image: cannot load %s", d->file);
 }
 
 /* returns whether the picture changed */
-static int img_set(Object *obj, struct ImgData *d, struct TagItem *tags)
+static int img_set(struct ImgData *d, struct TagItem *tags)
 {
     struct TagItem *t = FindTagItem(MUIA_A26Img_File, tags);
     if (!t) return 0;
@@ -347,7 +309,7 @@ static int img_set(Object *obj, struct ImgData *d, struct TagItem *tags)
     } else {
         d->file[0] = 0;
     }
-    img_load(obj, d);
+    img_load(d);
     return 1;
 }
 
@@ -364,7 +326,8 @@ static __saveds ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Ob
             d = INST_DATA(cl, obj);
             memset(d, 0, sizeof(*d));
             d->black = -1;
-            img_set(obj, d, ((struct opSet *)msg)->ops_AttrList);
+            memset(d->pen, 0xFF, sizeof(d->pen));
+            img_set(d, ((struct opSet *)msg)->ops_AttrList);
         }
         return (ULONG)obj;
     case OM_DISPOSE:
@@ -374,7 +337,7 @@ static __saveds ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Ob
         /* MUI sets attributes of its own too, also while the window is
          * being opened: draw only for a new picture and only when shown */
         d = INST_DATA(cl, obj);
-        if (img_set(obj, d, ((struct opSet *)msg)->ops_AttrList) && d->shown)
+        if (img_set(d, ((struct opSet *)msg)->ops_AttrList) && d->shown)
             MUI_Redraw(obj, MADF_DRAWOBJECT);
         break;
     case MUIM_Show:
@@ -407,11 +370,10 @@ static __saveds ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Ob
                 d->ry = di.Resolution.y;
             }
         }
-        img_load(obj, d);
         return TRUE;
     case MUIM_Cleanup:
         d = INST_DATA(cl, obj);
-        img_free(d);
+        img_free_scaled(d);     /* pens and bitmap belong to the screen */
         if (d->black >= 0) ReleasePen(_screen(obj)->ViewPort.ColorMap, d->black);
         d->black = -1;
         d->setup = 0;
@@ -431,7 +393,7 @@ static __saveds ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Ob
             LONG x = _mleft(obj), y = _mtop(obj), w = _mwidth(obj), h = _mheight(obj);
             SetAPen(_rp(obj), d->black >= 0 ? d->black : _dri(obj)->dri_Pens[BACKGROUNDPEN]);
             RectFill(_rp(obj), x, y, x + w - 1, y + h - 1);
-            if (d->bm) img_scale(d, w, h);
+            if (d->si.pix && d->setup) img_scale(d, w, h);
             if (d->sbm) {
                 LONG bw = d->sw < w ? d->sw : w, bh = d->sh < h ? d->sh : h;
                 BltBitMapRastPort(d->sbm, 0, 0, _rp(obj), x + (w - bw) / 2, y + (h - bh) / 2,
@@ -663,12 +625,22 @@ static void snap_path(const Game *g, char *out, const char *ext)
 
 /* download the screenshot of g if it is not cached yet; returns 1 if a
  * picture file exists afterwards */
+/* makes sure the screenshot cache file (snaps/<CRC>.a26i) exists:
+ * downloads the PNG if needed and converts it once */
 static int fetch_snap(const Game *g)
 {
-    char path[64], none[64], url[512], cmd[900], apath[300];
+    char path[64], none[64], cache[64], url[512], cmd[900], apath[300];
     FILE *f;
+    snap_path(g, cache, "a26i");
+    if (exists(cache)) return 1;
     snap_path(g, path, "png");
-    if (exists(path)) return 1;
+    if (exists(path)) {
+        int ok;
+        set(app, MUIA_Application_Sleep, TRUE);
+        ok = !snap_convert(path, cache);
+        set(app, MUIA_Application_Sleep, FALSE);
+        return ok;
+    }
     snap_path(g, none, "none");
     if (exists(none) || !g->info || !g->info->name) return 0;
     gamedb_thumb_url(g->info->name, url, sizeof(url));
@@ -676,8 +648,12 @@ static int fetch_snap(const Game *g)
     sprintf(cmd, "curl -s -f -L -o \"%s\" \"%s\"", apath, url);
     set(app, MUIA_Application_Sleep, TRUE);
     run(cmd);
+    if (exists(path) && !snap_convert(path, cache)) {
+        set(app, MUIA_Application_Sleep, FALSE);
+        return 1;
+    }
     set(app, MUIA_Application_Sleep, FALSE);
-    if (exists(path)) return 1;
+    if (exists(path)) return 0;     /* downloaded but not readable */
     f = fopen(none, "w");           /* not available: do not ask again */
     if (f) fclose(f);
     return 0;
@@ -766,7 +742,7 @@ static void refresh_info(void)
     nnset(cy_colors, MUIA_Cycle_Active, g->colors);
     nnset(cy_port, MUIA_Cycle_Active, g->port1);
 
-    snap_path(g, path, "png");
+    snap_path(g, path, "a26i");
     if (fetch_snap(g)) set(img, MUIA_A26Img_File, path);
     else set(img, MUIA_A26Img_File, NULL);
 }
@@ -1123,6 +1099,7 @@ int main(int argc, char **argv)
     scan_roms();
 
     vi_install();
+    CyberGfxBase = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 40);
     own_screen = open_screen();
     trace("build gui", NULL);
     if (!build_gui()) {
@@ -1172,6 +1149,7 @@ out:
     free(shown);
     trace("exit", NULL);
     vi_remove();
+    if (CyberGfxBase) CloseLibrary(CyberGfxBase);
     if (MUIMasterBase) CloseLibrary(MUIMasterBase);
     if (UtilityBase) CloseLibrary(UtilityBase);
     if (DataTypesBase) CloseLibrary(DataTypesBase);

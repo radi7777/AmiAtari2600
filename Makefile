@@ -29,10 +29,13 @@ $(BUILD)/tia_equiv: tests/tia_equiv.c $(CORE_SRC) src/core/*.h | $(BUILD)
 $(BUILD)/tia_check: tests/tia_equiv.c $(CORE_SRC) src/core/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -DA26_TIA_REFERENCE -DA26_CHECK -o $@ tests/tia_equiv.c $(CORE_SRC)
 
+$(BUILD)/snapimg_test: tests/snapimg_test.c src/gui/snapimg.c src/gui/snapimg.h | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/snapimg_test.c src/gui/snapimg.c
+
 $(BUILD)/cpu_functional: tests/cpu_functional.c src/core/cpu.c src/core/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/cpu_functional.c src/core/cpu.c
 
-test: $(BUILD)/a26host $(BUILD)/cpu_functional $(BUILD)/vidconv_test $(BUILD)/tia_equiv $(BUILD)/tia_check
+test: $(BUILD)/a26host $(BUILD)/cpu_functional $(BUILD)/vidconv_test $(BUILD)/tia_equiv $(BUILD)/tia_check $(BUILD)/snapimg_test
 	sh tests/run_tests.sh
 
 # Cross-check the core on a big-endian 68k CPU (needs m68k-linux-gnu-gcc,

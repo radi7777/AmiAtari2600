@@ -142,7 +142,7 @@ $(BENCH_OUT)/bench.exe: $(BENCH_OUT)/start.o $(BENCH_OBJ) $(BENCH_OUT)/cpu6507.o
 # libraries/mui.h comes from the MUI SDK; only it and muiaros.h are copied
 # (the rest of that include directory is for gcc)
 MUI_SDK ?= $(abspath $(dir $(shell which $(VC)))../m68k-amigaos/include)
-GUI_SRC := src/gui/a26gui.c src/gui/gamedb.c src/core/cart.c
+GUI_SRC := src/gui/a26gui.c src/gui/gamedb.c src/gui/snapimg.c src/core/cart.c
 
 .PHONY: gui
 gui: $(OUT)/A26GUI
