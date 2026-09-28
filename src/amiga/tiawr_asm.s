@@ -39,7 +39,9 @@ _tia_write_asm:
         move.l  d7,_a26_cycles
         move.l  4+44+4(sp),d5           ; val
         move.b  d5,_a26_databus
-        mulu.l  #3,d7                   ; cc
+        move.l  d7,d0
+        add.l   d7,d7
+        add.l   d0,d7                   ; cc = cycles * 3
         move.l  4+44(sp),d0
         and.w   #$3F,d0
         move.w  .jt(pc,d0.w*2),d0
@@ -337,7 +339,6 @@ upd_colors:
 
 ; render up to colour clock d0 (update_to in tia.c); keeps d5, d7, a1-a3
 update_to:
-        movem.l d5/a1-a3,-(sp)
         move.l  d0,d6                   ; target
 .lp:    move.l  d6,d0
         sub.l   T_LAST(a6),d0
@@ -360,9 +361,11 @@ update_to:
 .x:     move.l  T_LINE(a6),d4
         cmp.l   #FB_LINES,d4
         bhs.s   .scr
-        move.l  T_FB(a6),a0
-        mulu.w  #160,d4
+        lsl.l   #5,d4                   ; line * 160 = line * 32 + line * 128
+        move.l  d4,a0
+        lsl.l   #2,d4
         add.l   d4,a0
+        add.l   T_FB(a6),a0
         bra.s   .out
 .scr:   lea     _tia_scratch_line32,a0
 .out:   bsr     render_memo
@@ -371,10 +374,11 @@ update_to:
         add.l   d0,T_LAST(a6)
         cmp.l   #LINE_CC,d3
         bne.s   .lp
+        move.l  a1,-(sp)                ; C code may trash a1
         jsr     _tia_end_line
+        move.l  (sp)+,a1
         bra.s   .lp
-.dn:    movem.l (sp)+,d5/a1-a3
-        rts
+.dn:    rts
 
 ; ---------------------------------------------------------------------
 ; render(): the segment memo of tia.c in front of tia_render

@@ -255,9 +255,29 @@ abgeschaltetem OS; Auswertung mit `tools/pcprof.py` und `make -f Makefile.amiga 
 | TIA-Schreibpfad in Assembler | 653.000 | 915.000 |
 | Timer-Warteschleifen übersprungen | 584.000 | 915.000 |
 | Verriegelungs-Masken vorberechnet | 584.000 | 619.000 |
+| HMOVE in Assembler, schnellere Dispatch-Schleife | 538.000 | 613.000 |
+| Segment-Memo (siehe unten) | 521.000 | 610.000 |
+| Ton-Abkürzung, kompakte Memo-Signatur | 510.000 | 588.000 |
+| gezeichnete Zeilen markieren (Bildausgabe) | 513.000 | 580.000 |
 
-Aktuell (Befehle pro Frame): Demon Attack 378k, Klax 426k, Ms. Pac-Man 432k, Space
-Invaders 531k, River Raid 584k, Cosmic Ark 619k, Pitfall 626k, Enduro 684k, Solaris 792k.
+Aktuell (Befehle pro Frame): Klax 323k, Demon Attack 367k, Ms. Pac-Man 380k, Pitfall
+393k, River Raid 516k, Cosmic Ark 580k, Enduro 582k, Solaris 639k. Teure Befehle wie
+`mulu.l` sind im Schreibpfad durch Additionen/Shifts ersetzt (mehr Befehle, weniger Takte).
+
+**Segment-Memo:** Eine Zeile wird in Abschnitten zwischen zwei TIA-Writes gezeichnet.
+Für jeden Abschnitt (Zeile, laufende Nummer) merkt sich der Renderer den kompletten
+render-relevanten Zustand (44 Byte, in der Tia-Struktur zusammenhängend angeordnet),
+den Pixelbereich und die erzeugten Kollisionen. Kommt derselbe Abschnitt mit demselben
+Zustand wieder, stehen die Pixel noch im Framebuffer (Abschnitte einer Zeile überlappen
+nie), es werden nur die Kollisionen übernommen. Einträge hinter dem letzten Abschnitt
+einer Zeile werden am Zeilenende verworfen; Abschnitte, die sich ständig ändern, werden
+nur noch jedes 16. Mal gespeichert. Der TIA markiert außerdem jede Zeile, in der er
+tatsächlich zeichnet; die Bildausgabe überspringt unmarkierte Zeilen ohne Vergleich.
+
+**Ton:** Die Paula-Pufferlänge wird pro Frame über einen Akkumulator bestimmt, damit ein
+Puffer im Mittel exakt ein Bild lang ist (mit fester Länge wiederholte Paula bei NTSC
+etwa alle 10 s, bei PAL alle 5 s einen Puffer: hörbares Knacksen). Die TIA-Tonkanäle
+werden in Takten, in denen der Teiler nicht auslöst, nur weitergezählt (exakt).
 
 **Timer-Warteschleifen:** Fast jedes Spiel wartet am Frame-Ende in `LDA INTIM / BNE *-3`
 (oder `BPL`, `LDX`/`LDY`). Liest der Kern INTIM innerhalb so einer Schleife, springt die
