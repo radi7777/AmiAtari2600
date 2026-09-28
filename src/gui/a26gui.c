@@ -810,9 +810,21 @@ static void start_game(void)
             g->region == 1 ? " NTSC" : g->region == 2 ? " PAL" : "",
             g->colors == 1 ? " COLORS=NTSC" : g->colors == 2 ? " COLORS=PAL" : "",
             g->port1 ? " PORT1" : "");
-    set(app, MUIA_Application_Sleep, TRUE);
-    run(cmd);
-    set(app, MUIA_Application_Sleep, FALSE);
+    {
+        /* the emulator takes the display and the input; afterwards the
+         * window must get the keyboard back, with the same gadget active
+         * (filter or list), or the cursor keys go nowhere */
+        Object *active = NULL;
+        struct Window *w = NULL;
+        get(win, MUIA_Window_ActiveObject, &active);
+        set(app, MUIA_Application_Sleep, TRUE);
+        run(cmd);
+        set(app, MUIA_Application_Sleep, FALSE);
+        get(win, MUIA_Window_Window, &w);
+        if (w) ScreenToFront(w->WScreen);
+        set(win, MUIA_Window_Activate, TRUE);
+        set(win, MUIA_Window_ActiveObject, active ? active : lv_games);
+    }
 }
 
 static void choose_romdir(void)
@@ -980,7 +992,7 @@ static int build_gui(void)
     lv_games = MUI_NewObject(MUIC_Listview, MUIA_Listview_List, lst_games, TAG_DONE);
     /* cursor up/down while typing in the filter move through the list */
     str_filter = MUI_NewObject(MUIC_String, MUIA_Frame, MUIV_Frame_String,
-                               MUIA_String_AttachedList, lst_games, TAG_DONE);
+                               MUIA_String_AttachedList, lv_games, TAG_DONE);
     txt_count = MUI_NewObject(MUIC_Text, MUIA_Text_Contents, "", TAG_DONE);
     /* created with 7 lines so the layout reserves room for the information */
     txt_info = MUI_NewObject(MUIC_Text, MUIA_Frame, MUIV_Frame_Text, MUIA_Background, MUII_TextBack,
