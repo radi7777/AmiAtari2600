@@ -48,15 +48,19 @@ struct GfxBase *GfxBase;
 struct Library *DataTypesBase;
 struct Library *UtilityBase;
 
-/* ---- trace log (PROGDIR:A26GUI.log), flushed line by line so it
- * survives a crash; enabled with DEBUG ---- */
-static FILE *logf;
+/* ---- trace log (PROGDIR:A26GUI.log), opened for every line so it can
+ * be read while the program runs and survives a crash; enabled with
+ * DEBUG ---- */
+static int debug;
 static void trace(const char *fmt, const char *arg)
 {
-    if (!logf) return;
-    fprintf(logf, fmt, arg ? arg : "");
-    fputc('\n', logf);
-    fflush(logf);
+    FILE *f;
+    if (!debug) return;
+    f = fopen("PROGDIR:A26GUI.log", "a");
+    if (!f) return;
+    fprintf(f, fmt, arg ? arg : "");
+    fputc('\n', f);
+    fclose(f);
 }
 
 /* ---- varargs helpers for the MUI macros ---- */
@@ -96,6 +100,10 @@ static char  romdir[256] = "PROGDIR:roms";
 #define DB_DIR      "PROGDIR:db"
 #define SNAP_DIR    "PROGDIR:snaps"
 
+/* MUI needs more than the 4 KB a Shell gives by default (with too little
+ * the window never opened on a chipset screen) */
+size_t __stack = 65536;
+
 /* PROGDIR: only means our directory to us; paths handed to other programs
  * (curl, A26) must be absolute */
 static char progdir[256];
@@ -115,7 +123,7 @@ static void abs_path(const char *p, char *out, int outlen)
 /* ---- MUI objects ---- */
 static Object *app, *win, *lv_games, *lst_games, *str_filter, *txt_count, *txt_info;
 static Object *img, *cy_diff0, *cy_diff1, *cy_tv, *cy_region, *cy_colors, *cy_port;
-static Object *bt_start, *bt_romdir, *bt_db, *bt_snaps;
+static Object *bt_start, *bt_romdir, *bt_db, *bt_snaps, *bt_quit;
 static struct Screen *own_screen;
 
 enum { ID_SELECT = 1, ID_START, ID_FILTER, ID_SWITCH, ID_ROMDIR, ID_DB, ID_SNAPS };
@@ -137,7 +145,9 @@ struct ImgData {
     struct BitMap *sbm;         /* scaled content */
     LONG sw, sh, aw, ah;        /* its size, for an area of aw x ah */
     LONG black;                 /* pen for the area background, -1 if none */
+    LONG rx, ry;                /* pixel aspect of the screen (display ticks) */
     int setup;
+    int shown;                  /* between MUIM_Show and MUIM_Hide */
     char file[256];
 };
 
@@ -200,8 +210,14 @@ static void img_scale(struct ImgData *d, LONG aw, LONG ah)
     if (d->sbm && d->aw == aw && d->ah == ah) return;
     if (d->sbm) { WaitBlit(); FreeBitMap(d->sbm); d->sbm = NULL; }
     d->aw = aw; d->ah = ah;
-    if (d->cw * ah <= d->ch * aw) { dh = ah; dw = d->cw * ah / d->ch; }
-    else { dw = aw; dh = d->ch * aw / d->cw; }
+    /* the snaps have square pixels; the screen's may not be (hires PAL:
+     * twice as high as wide) */
+    dh = ah;
+    dw = d->cw * ah * d->ry / (d->ch * d->rx);
+    if (dw > aw) {
+        dw = aw;
+        dh = d->ch * aw * d->rx / (d->cw * d->ry);
+    }
     if (dw < 1 || dh < 1) return;
     d->sbm = AllocBitMap(dw, dh, GetBitMapAttr(d->bm, BMA_DEPTH), BMF_CLEAR, d->bm);
     if (!d->sbm) return;
@@ -222,7 +238,7 @@ static void img_scale(struct ImgData *d, LONG aw, LONG ah)
 
 static void img_load(Object *obj, struct ImgData *d)
 {
-    struct TagItem tags[7];
+    struct TagItem tags[8];
     img_free(d);
     if (!d->setup || !d->file[0]) return;
     tags[0].ti_Tag = DTA_GroupID;       tags[0].ti_Data = GID_PICTURE;
@@ -231,7 +247,9 @@ static void img_load(Object *obj, struct ImgData *d)
     tags[3].ti_Tag = PDTA_DestMode;     tags[3].ti_Data = PMODE_V43;
     tags[4].ti_Tag = PDTA_UseFriendBitMap; tags[4].ti_Data = TRUE;
     tags[5].ti_Tag = OBP_Precision;     tags[5].ti_Data = PRECISION_IMAGE;
-    tags[6].ti_Tag = TAG_DONE;
+    /* dithering turns the few colours of a chipset screen into noise */
+    tags[6].ti_Tag = PDTA_DitherQuality; tags[6].ti_Data = 0;
+    tags[7].ti_Tag = TAG_DONE;
     trace("image: load %s", d->file);
     d->dto = NewDTObjectA((APTR)d->file, tags);
     trace("image: object %s", d->dto ? "ok" : "failed");
@@ -251,10 +269,11 @@ static void img_load(Object *obj, struct ImgData *d)
     img_bounds(d);
 }
 
-static void img_set(Object *obj, struct ImgData *d, struct TagItem *tags)
+/* returns whether the picture changed */
+static int img_set(Object *obj, struct ImgData *d, struct TagItem *tags)
 {
     struct TagItem *t = FindTagItem(MUIA_A26Img_File, tags);
-    if (!t) return;
+    if (!t) return 0;
     if (t->ti_Data) {
         strncpy(d->file, (const char *)t->ti_Data, sizeof(d->file) - 1);
         d->file[sizeof(d->file) - 1] = 0;
@@ -262,10 +281,13 @@ static void img_set(Object *obj, struct ImgData *d, struct TagItem *tags)
         d->file[0] = 0;
     }
     img_load(obj, d);
+    return 1;
 }
 
-static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj,
-                          __reg("a1") Msg msg)
+/* __saveds: MUI calls this with its own a4, and our globals (library
+ * bases included) are addressed through a4 in vbcc's small data model */
+static __saveds ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj,
+                                   __reg("a1") Msg msg)
 {
     struct ImgData *d;
     switch (msg->MethodID) {
@@ -282,15 +304,39 @@ static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj
         img_free(INST_DATA(cl, obj));
         break;
     case OM_SET:
+        /* MUI sets attributes of its own too, also while the window is
+         * being opened: draw only for a new picture and only when shown */
         d = INST_DATA(cl, obj);
-        img_set(obj, d, ((struct opSet *)msg)->ops_AttrList);
-        MUI_Redraw(obj, MADF_DRAWOBJECT);
+        if (img_set(obj, d, ((struct opSet *)msg)->ops_AttrList) && d->shown)
+            MUI_Redraw(obj, MADF_DRAWOBJECT);
+        break;
+    case MUIM_Show:
+        if (!DoSuperMethodA(cl, obj, msg)) return FALSE;
+        d = INST_DATA(cl, obj);
+        d->shown = 1;
+        return TRUE;
+    case MUIM_Hide:
+        d = INST_DATA(cl, obj);
+        d->shown = 0;
         break;
     case MUIM_Setup:
+        trace("image: setup", NULL);
         if (!DoSuperMethodA(cl, obj, msg)) return FALSE;
         d = INST_DATA(cl, obj);
         d->setup = 1;
+        trace("image: pens", NULL);
         d->black = ObtainBestPenA(_screen(obj)->ViewPort.ColorMap, 0, 0, 0, NULL);
+        {
+            struct DisplayInfo di;
+            ULONG mode = GetVPModeID(&_screen(obj)->ViewPort);
+            d->rx = d->ry = 1;
+            if (mode != INVALID_ID &&
+                GetDisplayInfoData(NULL, (UBYTE *)&di, sizeof(di), DTAG_DISP, mode) &&
+                di.Resolution.x > 0 && di.Resolution.y > 0) {
+                d->rx = di.Resolution.x;
+                d->ry = di.Resolution.y;
+            }
+        }
         img_load(obj, d);
         return TRUE;
     case MUIM_Cleanup:
@@ -304,8 +350,8 @@ static ULONG img_dispatch(__reg("a0") struct IClass *cl, __reg("a2") Object *obj
         struct MUI_MinMax *mm;
         DoSuperMethodA(cl, obj, msg);
         mm = ((struct MUIP_AskMinMax *)msg)->MinMaxInfo;
-        mm->MinWidth += 320; mm->DefWidth += 320; mm->MaxWidth += 320;
-        mm->MinHeight += 240; mm->DefHeight += 240; mm->MaxHeight += 240;
+        mm->MinWidth += 160; mm->DefWidth += 320; mm->MaxWidth += 320;
+        mm->MinHeight += 80; mm->DefHeight += 240; mm->MaxHeight += 240;
         return 0;
     }
     case MUIM_Draw:
@@ -708,9 +754,66 @@ static void choose_romdir(void)
 }
 
 /* ---------------------------------------------------------------------
+ * MUI 3.8 calls gadtools' GetVisualInfoA() with whatever happens to be in
+ * a1 as tag list. OS 3.0/3.1 ignored the tags; the gadtools of OS 3.2
+ * reads them (GTVI_...) and can run off through memory, which hung the
+ * window opening now and then. While A26GUI runs, a small trampoline in
+ * front of GetVisualInfoA passes NULL tags for calls from our own task;
+ * other tasks go through unchanged.
+ */
+#define LVO_GetVisualInfoA (-126)
+
+static struct Library *GadToolsBase;
+static ULONG *vi_patch;         /* trampoline code + [7] = our task */
+
+static void vi_install(void)
+{
+    UWORD *c;
+    UBYTE *vec;
+    GadToolsBase = OpenLibrary((CONST_STRPTR)"gadtools.library", 39);
+    if (!GadToolsBase) return;
+    vi_patch = (ULONG *)AllocVec(32, MEMF_PUBLIC);
+    if (!vi_patch) return;
+    c = (UWORD *)vi_patch;
+    Forbid();
+    vec = (UBYTE *)GadToolsBase + LVO_GetVisualInfoA;
+    c[0] = 0x2F0E;                              /* move.l a6,-(sp)      */
+    c[1] = 0x2C78; c[2] = 0x0004;               /* movea.l 4.w,a6       */
+    c[3] = 0x202E; c[4] = 0x0114;               /* move.l ThisTask(a6),d0 */
+    c[5] = 0x2C5F;                              /* movea.l (sp)+,a6     */
+    c[6] = 0xB0B9;                              /* cmp.l task.l,d0      */
+    *(ULONG *)(c + 7) = (ULONG)&vi_patch[7];
+    c[9] = 0x6602;                              /* bne.s +2             */
+    c[10] = 0x93C9;                             /* suba.l a1,a1         */
+    c[11] = 0x4EF9;                             /* jmp original.l       */
+    *(ULONG *)(c + 12) = *(ULONG *)(vec + 2);
+    vi_patch[7] = (ULONG)FindTask(NULL);
+    CacheClearU();
+    SetFunction(GadToolsBase, LVO_GetVisualInfoA, (APTR)vi_patch);
+    Permit();
+}
+
+static void vi_remove(void)
+{
+    if (vi_patch) {
+        UBYTE *vec = (UBYTE *)GadToolsBase + LVO_GetVisualInfoA;
+        Forbid();
+        vi_patch[7] = 0;                        /* never matches again */
+        /* put the original back unless someone patched after us; the
+         * trampoline stays allocated in case a task is inside it */
+        if (*(ULONG *)(vec + 2) == (ULONG)vi_patch)
+            SetFunction(GadToolsBase, LVO_GetVisualInfoA, (APTR)*(ULONG *)((UWORD *)vi_patch + 12));
+        Permit();
+    }
+    if (GadToolsBase) CloseLibrary(GadToolsBase);
+}
+
+/* ---------------------------------------------------------------------
  * screen: RTG Workbench -> window there; native -> own screen with more
  * colours (same mode as the Workbench, as many planes as it allows)
  */
+static int force_native;        /* NATIVE: own chipset screen even with RTG */
+
 static struct Screen *open_screen(void)
 {
     struct Screen *wb = LockPubScreen(NULL);
@@ -721,22 +824,39 @@ static struct Screen *open_screen(void)
     rtg = GetBitMapAttr(wb->RastPort.BitMap, BMA_DEPTH) > 8 ||
           !(GetBitMapAttr(wb->RastPort.BitMap, BMA_FLAGS) & BMF_STANDARD);
     modeid = GetVPModeID(&wb->ViewPort);
+    if (rtg && force_native) {
+        rtg = 0;
+        modeid = HIRES_KEY;             /* default monitor (PAL or NTSC) */
+    }
     if (!rtg && modeid != INVALID_ID) {
         struct DimensionInfo dims;
         depth = 5;
         if (GetDisplayInfoData(NULL, (UBYTE *)&dims, sizeof(dims), DTAG_DIMS, modeid))
             depth = dims.MaxDepth > 8 ? 8 : dims.MaxDepth;
-        if (depth > wb->RastPort.BitMap->Depth) {
-            struct TagItem t[7];
-            t[0].ti_Tag = SA_LikeWorkbench; t[0].ti_Data = TRUE;
+        if (depth > wb->RastPort.BitMap->Depth || force_native) {
+            static UWORD pens[] = { (UWORD)~0 };
+            /* static: the tags are read again later (GetTagData from
+             * gadtools while a window opens); a list on the stack is
+             * garbage by then and the search ran off through memory */
+            static struct TagItem t[8];
+            t[0].ti_Tag = force_native ? TAG_IGNORE : SA_LikeWorkbench; t[0].ti_Data = TRUE;
             t[1].ti_Tag = SA_DisplayID;     t[1].ti_Data = modeid;
             t[2].ti_Tag = SA_Depth;         t[2].ti_Data = depth;
             t[3].ti_Tag = SA_Title;         t[3].ti_Data = (ULONG)"A26 - Atari 2600";
-            t[4].ti_Tag = SA_PubName;       t[4].ti_Data = (ULONG)"A26GUI";
+            t[4].ti_Tag = TAG_IGNORE;
             t[5].ti_Tag = SA_SharePens;     t[5].ti_Data = TRUE;
-            t[6].ti_Tag = TAG_DONE;
+            t[6].ti_Tag = SA_Pens;          t[6].ti_Data = (ULONG)pens;
+            t[7].ti_Tag = TAG_DONE;
             s = OpenScreenTagList(NULL, t);
-            if (s) PubScreenStatus(s, 0);
+            {
+                char m[40];
+                sprintf(m, "%08lx depth %lu %s", modeid, depth, s ? "ok" : "failed");
+                trace("screen: %s", m);
+            }
+            if (s) {
+                /* the full-screen backdrop window of build_gui() covers it */
+                if (s->Height < 400) ShowTitle(s, FALSE);
+            }
         }
     }
     UnlockPubScreen(NULL, wb);
@@ -759,8 +879,14 @@ static Object *cycle(const char *const *entries)
     return MUI_NewObject(MUIC_Cycle, MUIA_Cycle_Entries, entries, TAG_DONE);
 }
 
+static const char *const reg_pages[] = { "Info", "Konsole", NULL };
+
 static int build_gui(void)
 {
+    /* small own screen (PAL/NTSC hires, 200..256 lines): full-screen
+     * backdrop window, information and switches on two pages */
+    int small = own_screen && own_screen->Height < 400;
+    Object *konsole, *right;
     img_class = MUI_CreateCustomClass(NULL, MUIC_Area, NULL, sizeof(struct ImgData), (APTR)img_dispatch);
     if (!img_class) return 0;
     img = NewObject(img_class->mcc_Class, NULL, MUIA_Frame, MUIV_Frame_Text,
@@ -782,14 +908,56 @@ static int build_gui(void)
     cy_colors = cycle(cy_col);
     cy_port = cycle(cy_p1);
     bt_start = MUI_MakeObject(MUIO_Button, "_Spielen");
-    bt_romdir = MUI_MakeObject(MUIO_Button, "_ROM-Ordner ...");
-    bt_db = MUI_MakeObject(MUIO_Button, "_Datenbank laden");
-    bt_snaps = MUI_MakeObject(MUIO_Button, "Alle _Bilder laden");
+    bt_romdir = MUI_MakeObject(MUIO_Button, small ? "_ROMs ..." : "_ROM-Ordner ...");
+    bt_db = MUI_MakeObject(MUIO_Button, small ? "_Datenbank" : "_Datenbank laden");
+    bt_snaps = MUI_MakeObject(MUIO_Button, small ? "_Bilder" : "Alle _Bilder laden");
+    bt_quit = small ? MUI_MakeObject(MUIO_Button, "_Ende") : NULL;
+
+    konsole = MUI_NewObject(MUIC_Group, MUIA_Group_Columns, 2,
+        small ? TAG_IGNORE : MUIA_Frame, MUIV_Frame_Group,
+        small ? TAG_IGNORE : MUIA_FrameTitle, "Konsole",
+        MUIA_Group_Child, label("Difficulty links"),  MUIA_Group_Child, cy_diff0,
+        MUIA_Group_Child, label("Difficulty rechts"), MUIA_Group_Child, cy_diff1,
+        MUIA_Group_Child, label("TV"),                MUIA_Group_Child, cy_tv,
+        MUIA_Group_Child, label("Region"),            MUIA_Group_Child, cy_region,
+        MUIA_Group_Child, label("Farbpalette"),       MUIA_Group_Child, cy_colors,
+        MUIA_Group_Child, label("Spieler 2"),         MUIA_Group_Child, cy_port,
+        TAG_DONE);
+    if (small)
+        right = MUI_NewObject(MUIC_Group, MUIA_HorizWeight, 100,
+            MUIA_Group_Child, img,
+            MUIA_Group_Child, MUI_NewObject(MUIC_Register, MUIA_Register_Titles, reg_pages,
+                MUIA_Group_Child, txt_info,
+                MUIA_Group_Child, konsole,
+                TAG_DONE),
+            MUIA_Group_Child, MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE,
+                MUIA_Group_Child, bt_start,
+                MUIA_Group_Child, bt_quit,
+                TAG_DONE),
+            TAG_DONE);
+    else
+        right = MUI_NewObject(MUIC_Group, MUIA_HorizWeight, 100,
+            MUIA_Group_Child, img,
+            MUIA_Group_Child, txt_info,
+            MUIA_Group_Child, konsole,
+            MUIA_Group_Child, bt_start,
+            TAG_DONE);
 
     win = MUI_NewObject(MUIC_Window,
-        MUIA_Window_Title, "A26 - Atari 2600 Emulator",
-        MUIA_Window_ID, MAKE_ID('A','2','6','G'),
+        MUIA_Window_Title, small ? NULL : "A26 - Atari 2600 Emulator",
+        /* the remembered size belongs to the Workbench window */
+        own_screen ? TAG_IGNORE : MUIA_Window_ID, MAKE_ID('A','2','6','G'),
         own_screen ? MUIA_Window_Screen : TAG_IGNORE, own_screen,
+        small ? MUIA_Window_Backdrop : TAG_IGNORE, TRUE,
+        small ? MUIA_Window_Borderless : TAG_IGNORE, TRUE,
+        small ? MUIA_Window_CloseGadget : TAG_IGNORE, FALSE,
+        small ? MUIA_Window_DepthGadget : TAG_IGNORE, FALSE,
+        small ? MUIA_Window_SizeGadget : TAG_IGNORE, FALSE,
+        small ? MUIA_Window_DragBar : TAG_IGNORE, FALSE,
+        small ? MUIA_Window_LeftEdge : TAG_IGNORE, 0,
+        small ? MUIA_Window_TopEdge : TAG_IGNORE, 0,
+        small ? MUIA_Window_Width : TAG_IGNORE, MUIV_Window_Width_Screen(100),
+        small ? MUIA_Window_Height : TAG_IGNORE, MUIV_Window_Height_Screen(100),
         MUIA_Window_RootObject, MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE,
             MUIA_Group_Child, MUI_NewObject(MUIC_Group, MUIA_HorizWeight, 120,
                 MUIA_Group_Child, MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE,
@@ -804,20 +972,7 @@ static int build_gui(void)
                     MUIA_Group_Child, bt_snaps,
                     TAG_DONE),
                 TAG_DONE),
-            MUIA_Group_Child, MUI_NewObject(MUIC_Group, MUIA_HorizWeight, 100,
-                MUIA_Group_Child, img,
-                MUIA_Group_Child, txt_info,
-                MUIA_Group_Child, MUI_NewObject(MUIC_Group, MUIA_Group_Columns, 2,
-                    MUIA_Frame, MUIV_Frame_Group, MUIA_FrameTitle, "Konsole",
-                    MUIA_Group_Child, label("Difficulty links"),  MUIA_Group_Child, cy_diff0,
-                    MUIA_Group_Child, label("Difficulty rechts"), MUIA_Group_Child, cy_diff1,
-                    MUIA_Group_Child, label("TV"),                MUIA_Group_Child, cy_tv,
-                    MUIA_Group_Child, label("Region"),            MUIA_Group_Child, cy_region,
-                    MUIA_Group_Child, label("Farbpalette"),       MUIA_Group_Child, cy_colors,
-                    MUIA_Group_Child, label("Spieler 2"),         MUIA_Group_Child, cy_port,
-                    TAG_DONE),
-                MUIA_Group_Child, bt_start,
-                TAG_DONE),
+            MUIA_Group_Child, right,
             TAG_DONE),
         TAG_DONE);
 
@@ -830,10 +985,14 @@ static int build_gui(void)
         MUIA_Application_Base, "A26GUI",
         MUIA_Application_Window, win,
         TAG_DONE);
+    trace(app ? "application ok" : "application failed", NULL);
     if (!app) return 0;
 
     DoMethod(win, MUIM_Notify, MUIA_Window_CloseRequest, TRUE, app, 2,
              MUIM_Application_ReturnID, MUIV_Application_ReturnID_Quit);
+    if (bt_quit)
+        DoMethod(bt_quit, MUIM_Notify, MUIA_Pressed, FALSE, app, 2,
+                 MUIM_Application_ReturnID, MUIV_Application_ReturnID_Quit);
     DoMethod(lst_games, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime, app, 2,
              MUIM_Application_ReturnID, ID_SELECT);
     DoMethod(lv_games, MUIM_Notify, MUIA_Listview_DoubleClick, TRUE, app, 2,
@@ -875,7 +1034,13 @@ int main(int argc, char **argv)
         if (!strncmp(argv[i], "ROMDIR=", 7) || !strncmp(argv[i], "romdir=", 7))
             strncpy(romdir, argv[i] + 7, sizeof(romdir) - 1);
         else if (!strcmp(argv[i], "DEBUG") || !strcmp(argv[i], "debug"))
-            logf = fopen("PROGDIR:A26GUI.log", "w");
+        {
+            FILE *f = fopen("PROGDIR:A26GUI.log", "w");
+            if (f) fclose(f);
+            debug = 1;
+        }
+        else if (!strcmp(argv[i], "NATIVE") || !strcmp(argv[i], "native"))
+            force_native = 1;
     }
     trace("start %s", VERSION);
     if (GetProgramDir()) NameFromLock(GetProgramDir(), (STRPTR)progdir, sizeof(progdir));
@@ -887,13 +1052,24 @@ int main(int argc, char **argv)
     trace("scan %s", romdir);
     scan_roms();
 
+    vi_install();
     own_screen = open_screen();
+    trace("build gui", NULL);
     if (!build_gui()) {
         printf("cannot create the MUI application\n");
         goto out;
     }
+    trace("open window", NULL);
     set(win, MUIA_Window_Open, TRUE);
-    trace("window open", NULL);
+    {
+        ULONG open = FALSE;
+        get(win, MUIA_Window_Open, &open);
+        trace(open ? "window open" : "window failed", NULL);
+        if (!open) {
+            printf("cannot open the window (screen too small?)\n");
+            goto out;
+        }
+    }
     fill_list();
     if (!exists(DB_DIR "/nointro.dat")) download_db();
     trace("ready", NULL);
@@ -912,6 +1088,8 @@ int main(int argc, char **argv)
         if (sigs) {
             sigs = Wait(sigs | SIGBREAKF_CTRL_C);
             if (sigs & SIGBREAKF_CTRL_C) break;
+        } else if (SetSignal(0, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) {
+            break;
         }
     }
 
@@ -923,7 +1101,7 @@ out:
     free(games);
     free(shown);
     trace("exit", NULL);
-    if (logf) fclose(logf);
+    vi_remove();
     if (MUIMasterBase) CloseLibrary(MUIMasterBase);
     if (UtilityBase) CloseLibrary(UtilityBase);
     if (DataTypesBase) CloseLibrary(DataTypesBase);
