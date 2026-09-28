@@ -216,9 +216,10 @@ Gemessen mit `make m68k-profile`: ausgeführte 68k-Befehle pro emuliertem Frame
 Budget für 60 fps: etwa 130.000–200.000 Befehle pro Frame auf einem 68030 mit 50 MHz
 (bei ~4–6 Takten pro Befehl), die Hälfte bei 25 MHz.
 
-### Echte Hardware (A1200, Emu68/PiStorm, 68040, Kickstart 3.2)
+### Echte Hardware
 
-Rasterzeilen pro Frame (Budget NTSC: 262), gemessen mit `PROFILE`/`BENCH=300`:
+PiStorm (Emu68, meldet 68040), Rasterzeilen pro Frame (Budget NTSC: 262), gemessen mit
+`PROFILE`/`BENCH=300` vor den Assembler-Optimierungen:
 
 | Spiel | Emulation | Ton | Bild (vorher → jetzt) | Tempo ohne Vsync |
 |---|---|---|---|---|
@@ -226,10 +227,43 @@ Rasterzeilen pro Frame (Budget NTSC: 262), gemessen mit `PROFILE`/`BENCH=300`:
 | River Raid | 81 | 5 | 30 → 9–12 | 159 fps |
 | Enduro | 72 | 5 | 73 → 25 | 153 fps |
 
-In Echtzeit: konstant 60 fps, die Frame-Verzögerung startet die Emulation im Schnitt
-75 Zeilen (~5 ms) nach dem Vertical Blank. Auf dieser Maschine ist das Chip-RAM der
-Engpass, nicht die CPU; auf einem echten 68030 ist es umgekehrt, dort muss vor allem
-der Kern (CPU + TIA) schneller werden.
+In Echtzeit: konstant 60 fps; auf dieser Maschine ist das Chip-RAM der Engpass.
+
+68030/50 (TF530, A500): River Raid anfangs 5,3 fps (Emulation 2419 Zeilen pro Frame,
+~6 MIPS). Volle Geschwindigkeit ist dort nicht erreichbar; Mindestziel ist ein 68040.
+
+### 68k-Befehle pro Frame (tools/m68kprof)
+
+`make build/m68kprof` und `make -f Makefile.amiga bench` bauen einen Befehlszähler auf
+Basis des Musashi-Emulators und ein OS-freies Benchmark-Programm aus genau dem Code, der
+auch auf dem Amiga läuft (vbcc, asm-CPU, asm-TIA, asm-Bildkonvertierung). Das Ergebnis ist
+exakt und reproduzierbar, pro Funktion mit Aufrufzahl:
+
+```sh
+./build/m68kprof build/m68kbench/bench.exe build/m68kbench/bench.map roms/riverraid.bin -frames 30 -video
+```
+
+Auf echter Hardware gibt es zusätzlich einen Sampling-Profiler (`A26 rom PROFPC`, nur mit
+abgeschaltetem OS; Auswertung mit `tools/pcprof.py` und `make -f Makefile.amiga map`).
+
+| Stand | River Raid | Cosmic Ark |
+|---|---|---|
+| Start (C-Renderer, C-Bildkonvertierung) | 1.113.000 | – |
+| unnötige Masken-Updates entfernt | 1.000.000 | – |
+| Bildkonvertierung in Assembler | 856.000 | – |
+| TIA-Renderer in Assembler | 757.000 | – |
+| TIA-Schreibpfad in Assembler | 653.000 | 915.000 |
+| Timer-Warteschleifen übersprungen | 584.000 | 915.000 |
+| Verriegelungs-Masken vorberechnet | 584.000 | 619.000 |
+
+Aktuell (Befehle pro Frame): Demon Attack 378k, Klax 426k, Ms. Pac-Man 432k, Space
+Invaders 531k, River Raid 584k, Cosmic Ark 619k, Pitfall 626k, Enduro 684k, Solaris 792k.
+
+**Timer-Warteschleifen:** Fast jedes Spiel wartet am Frame-Ende in `LDA INTIM / BNE *-3`
+(oder `BPL`, `LDX`/`LDY`). Liest der Kern INTIM innerhalb so einer Schleife, springt die
+Zeit um ganze Schleifenrunden vor bis zu dem Lesezugriff, der die Schleife beendet. Das
+ist zyklusgenau identisch (geprüft: alle ROMs mit und ohne `-noskip` bitgleich), spart
+aber die Emulation jeder Runde.
 
 ### TIA-Renderer
 

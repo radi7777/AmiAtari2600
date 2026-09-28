@@ -98,7 +98,6 @@ typedef struct {
     u32 hm_line_cc;             /* start of that line */
     u8  hm_v[5];                /* extra clocks each object is due */
     u8  hm_lock[5];             /* locked in HMOVE (see hm_changed) */
-    u8  lock_nruns[3];
 
     /* input */
     u8  fire[2];            /* 1 = pressed (INPT4 / INPT5) */

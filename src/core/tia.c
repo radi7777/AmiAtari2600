@@ -61,10 +61,12 @@ static u8  player_runs[2][8][MAX_RUNS * 2], player_nruns[2][8];
 static u8  missile_runs[8][4][MAX_RUNS * 2], missile_nruns[8][4];
 static u8  ball_runs[4][2], ball_nruns[4];
 
-/* masks of locked missiles/ball (M0, M1, BL), absolute x, built on demand */
-static u8  lock_mask[3][320];
+/* masks of locked missiles/ball, relative to the position like the normal
+ * masks: [pos & 3][nusiz mode][size], index x - pos + 160 */
+static u8  lock_mask[4][8][4][320];
 #define LOCK_RUNS 8             /* 3 copies, each may wrap around the edge */
-static u8  lock_runs[3][LOCK_RUNS * 2];
+static u8  lock_runs[4][8][4][LOCK_RUNS * 2];
+static u8  lock_nruns[4][8][4];
 
 #ifdef A26_TIA_REFERENCE
 int tia_use_reference;          /* 1 = original per-pixel renderer */
@@ -239,6 +241,8 @@ static u8 find_runs(const u8 *mask, u8 *runs)
     return (u8)n;
 }
 
+static void build_lock_masks(void);
+
 static void build_tables(void)
 {
     int mode, x, i, size, pfp, obj;
@@ -345,6 +349,7 @@ static void build_tables(void)
     }
     for (size = 0; size < 4; size++)
         ball_nruns[size] = find_runs(ball_mask[size], ball_runs[size]);
+    build_lock_masks();
     tables_ready = 1;
 }
 
@@ -370,38 +375,38 @@ static void upd_p1(void)
 
 static int copy_at(int mode, int offset);
 
-/* build the mask of locked object i (0 = M0, 1 = M1, 2 = BL) */
-static void build_lock_mask(int i, int mode, int size, int pos)
+/* all lock masks (see lock_shape); called from build_tables */
+static void build_lock_masks(void)
 {
-    u8 *m = lock_mask[i];
-    int c, k, n, x;
-    memset(m, 0, 320);
-    for (c = 0; c <= 64; c += 16) {
-        int p, st, w;
-        if (!copy_at(mode, c)) continue;
-        p = (pos + c) % TIA_WIDTH;
-        st = lock_shape[size][p & 3][0];
-        w = lock_shape[size][p & 3][1];
-        for (k = 0; k < w; k++) {
-            int x = (p + st + k + TIA_WIDTH) % TIA_WIDTH;
-            m[x] = m[x + TIA_WIDTH] = 1;
-        }
-    }
-    /* runs relative to the object position */
-    n = 0;
-    x = 0;
-    while (x < TIA_WIDTH && n < LOCK_RUNS) {
-        if (m[x]) {
-            int st = x;
-            while (x < TIA_WIDTH && m[x]) x++;
-            lock_runs[i][n * 2] = (u8)((st - pos + TIA_WIDTH) % TIA_WIDTH);
-            lock_runs[i][n * 2 + 1] = (u8)(x - st);
-            n++;
-        } else {
-            x++;
-        }
-    }
-    tia.lock_nruns[i] = (u8)n;
+    int ph, mode, size, c, k, n, x;
+    for (ph = 0; ph < 4; ph++)
+        for (mode = 0; mode < 8; mode++)
+            for (size = 0; size < 4; size++) {
+                u8 *m = lock_mask[ph][mode][size];
+                u8 *r = lock_runs[ph][mode][size];
+                for (c = 0; c <= 64; c += 16) {
+                    int st = lock_shape[size][ph][0], w = lock_shape[size][ph][1];
+                    if (!copy_at(mode, c)) continue;
+                    for (k = 0; k < w; k++) {
+                        int d = (c + st + k + TIA_WIDTH) % TIA_WIDTH;
+                        m[d] = m[d + TIA_WIDTH] = 1;
+                    }
+                }
+                n = 0;
+                x = 0;
+                while (x < TIA_WIDTH && n < LOCK_RUNS) {
+                    if (m[x]) {
+                        int st = x;
+                        while (x < TIA_WIDTH && m[x]) x++;
+                        r[n * 2] = (u8)st;
+                        r[n * 2 + 1] = (u8)(x - st);
+                        n++;
+                    } else {
+                        x++;
+                    }
+                }
+                lock_nruns[ph][mode][size] = (u8)n;
+            }
 }
 
 /* graphics only (GRPx, REFPx, VDELPx): the masks stay as they are */
@@ -424,10 +429,10 @@ static void upd_m0(void)
     tia.runs[2] = missile_runs[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3];
     tia.nruns[2] = missile_nruns[tia.nusiz0 & 7][(tia.nusiz0 >> 4) & 3];
     if (tia.hm_lock[2]) {
-        build_lock_mask(0, tia.nusiz0 & 7, (tia.nusiz0 >> 4) & 3, tia.pos_m0);
-        tia.m0_mask = lock_mask[0];
-        tia.runs[2] = lock_runs[0];
-        tia.nruns[2] = tia.lock_nruns[0];
+        int ph = tia.pos_m0 & 3, mode = tia.nusiz0 & 7, size = (tia.nusiz0 >> 4) & 3;
+        tia.m0_mask = &lock_mask[ph][mode][size][TIA_WIDTH - tia.pos_m0];
+        tia.runs[2] = lock_runs[ph][mode][size];
+        tia.nruns[2] = lock_nruns[ph][mode][size];
     }
 }
 
@@ -438,10 +443,10 @@ static void upd_m1(void)
     tia.runs[3] = missile_runs[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3];
     tia.nruns[3] = missile_nruns[tia.nusiz1 & 7][(tia.nusiz1 >> 4) & 3];
     if (tia.hm_lock[3]) {
-        build_lock_mask(1, tia.nusiz1 & 7, (tia.nusiz1 >> 4) & 3, tia.pos_m1);
-        tia.m1_mask = lock_mask[1];
-        tia.runs[3] = lock_runs[1];
-        tia.nruns[3] = tia.lock_nruns[1];
+        int ph = tia.pos_m1 & 3, mode = tia.nusiz1 & 7, size = (tia.nusiz1 >> 4) & 3;
+        tia.m1_mask = &lock_mask[ph][mode][size][TIA_WIDTH - tia.pos_m1];
+        tia.runs[3] = lock_runs[ph][mode][size];
+        tia.nruns[3] = lock_nruns[ph][mode][size];
     }
 }
 
@@ -452,10 +457,10 @@ static void upd_bl(void)
     tia.runs[4] = ball_runs[(tia.ctrlpf >> 4) & 3];
     tia.nruns[4] = ball_nruns[(tia.ctrlpf >> 4) & 3];
     if (tia.hm_lock[4]) {
-        build_lock_mask(2, 0, (tia.ctrlpf >> 4) & 3, tia.pos_bl);
-        tia.bl_mask = lock_mask[2];
-        tia.runs[4] = lock_runs[2];
-        tia.nruns[4] = tia.lock_nruns[2];
+        int ph = tia.pos_bl & 3, size = (tia.ctrlpf >> 4) & 3;
+        tia.bl_mask = &lock_mask[ph][0][size][TIA_WIDTH - tia.pos_bl];
+        tia.runs[4] = lock_runs[ph][0][size];
+        tia.nruns[4] = lock_nruns[ph][0][size];
     }
 }
 
