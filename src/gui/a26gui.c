@@ -978,7 +978,9 @@ static int build_gui(void)
                               MUIA_List_ConstructHook, MUIV_List_ConstructHook_String,
                               MUIA_List_DestructHook, MUIV_List_DestructHook_String, TAG_DONE);
     lv_games = MUI_NewObject(MUIC_Listview, MUIA_Listview_List, lst_games, TAG_DONE);
-    str_filter = MUI_NewObject(MUIC_String, MUIA_Frame, MUIV_Frame_String, TAG_DONE);
+    /* cursor up/down while typing in the filter move through the list */
+    str_filter = MUI_NewObject(MUIC_String, MUIA_Frame, MUIV_Frame_String,
+                               MUIA_String_AttachedList, lst_games, TAG_DONE);
     txt_count = MUI_NewObject(MUIC_Text, MUIA_Text_Contents, "", TAG_DONE);
     /* created with 7 lines so the layout reserves room for the information */
     txt_info = MUI_NewObject(MUIC_Text, MUIA_Frame, MUIV_Frame_Text, MUIA_Background, MUII_TextBack,
@@ -1081,6 +1083,9 @@ static int build_gui(void)
              MUIM_Application_ReturnID, ID_START);
     DoMethod(bt_start, MUIM_Notify, MUIA_Pressed, FALSE, app, 2,
              MUIM_Application_ReturnID, ID_START);
+    /* Return in the filter: on to the list */
+    DoMethod(str_filter, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime, win, 3,
+             MUIM_Set, MUIA_Window_ActiveObject, lv_games);
     DoMethod(str_filter, MUIM_Notify, MUIA_String_Contents, MUIV_EveryTime, app, 2,
              MUIM_Application_ReturnID, ID_FILTER);
     DoMethod(bt_romdir, MUIM_Notify, MUIA_Pressed, FALSE, app, 2, MUIM_Application_ReturnID, ID_ROMDIR);
