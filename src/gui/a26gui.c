@@ -657,12 +657,34 @@ static void snap_path(const Game *g, char *out, const char *ext)
 
 /* download the screenshot of g if it is not cached yet; returns 1 if a
  * picture file exists afterwards */
+/* curl does the downloads (https); is it there? checked once */
+static int have_curl = -1;
+static const char no_curl_msg[] =
+    "\33bcurl fehlt\33n\n"
+    "Datenbank und Bilder werden mit curl geladen\n"
+    "(Aminet: curl, braucht AmiSSL).\n"
+    "Oder db/ und snaps/ von einem anderen\n"
+    "Rechner kopieren.";
+
+static int curl_ok(void)
+{
+    if (have_curl < 0) have_curl = run("curl --version") == 0;
+    return have_curl;
+}
+
+/* result of the last download attempt: 0 ok, 1 not on the server,
+ * 2 no curl / no connection */
+static int snap_fail;
+
 /* makes sure the screenshot cache file (snaps/<CRC>.a26i) exists:
- * downloads the PNG if needed and converts it once */
+ * downloads the PNG if needed and converts it once. "Not on the server"
+ * (curl -f: 22) is remembered in a .none file; other failures (no curl,
+ * no network) are not, so a later try can still succeed. */
 static int fetch_snap(const Game *g)
 {
     char path[64], none[64], cache[64], url[512], cmd[900], apath[300];
     FILE *f;
+    int rc;
     snap_path(g, cache, "a26i");
     if (exists(cache)) return 1;
     snap_path(g, path, "png");
@@ -673,20 +695,27 @@ static int fetch_snap(const Game *g)
         set(app, MUIA_Application_Sleep, FALSE);
         return ok;
     }
+    snap_fail = 1;
     snap_path(g, none, "none");
     if (exists(none) || !g->info || !g->info->name) return 0;
+    if (!curl_ok()) { snap_fail = 2; return 0; }
     gamedb_thumb_url(g->info->name, url, sizeof(url));
     abs_path(path, apath, sizeof(apath));
     sprintf(cmd, "curl -s -f -L -o \"%s\" \"%s\"", apath, url);
     set(app, MUIA_Application_Sleep, TRUE);
-    run(cmd);
+    rc = run(cmd);
     if (exists(path) && !snap_convert(path, cache)) {
         set(app, MUIA_Application_Sleep, FALSE);
+        snap_fail = 0;
         return 1;
     }
     set(app, MUIA_Application_Sleep, FALSE);
     if (exists(path)) return 0;     /* downloaded but not readable */
-    f = fopen(none, "w");           /* not available: do not ask again */
+    if (rc != 22) {                 /* no connection etc.: try again later */
+        snap_fail = 2;
+        return 0;
+    }
+    f = fopen(none, "w");           /* not on the server: do not ask again */
     if (f) fclose(f);
     return 0;
 }
@@ -707,6 +736,7 @@ static void download_db(void)
 {
     char cmd[700], path[64], apath[300];
     int i;
+    if (!curl_ok()) { set_info(no_curl_msg); return; }
     make_dir(DB_DIR);
     set_info("Lade Spieldatenbank (libretro) ...");
     set(app, MUIA_Application_Sleep, TRUE);
@@ -726,11 +756,18 @@ static void fetch_all_snaps(void)
 {
     char msg[160];
     int i;
+    if (!curl_ok()) { set_info(no_curl_msg); return; }
     for (i = 0; i < ngames; i++) {
         sprintf(msg, "Lade Bilder: %d von %d\n%s", i + 1, ngames, games[i].name);
         set_info(msg);
         DoMethod(app, MUIM_Application_InputBuffered);
         fetch_snap(&games[i]);
+        if (snap_fail == 2) {
+            set_info("\33bKeine Verbindung\33n\n"
+                     "Die Bilder konnten nicht geladen werden.\n"
+                     "Netzwerk pr\374fen und nochmal versuchen.");
+            return;
+        }
     }
     refresh_info();
 }
