@@ -6,7 +6,7 @@
  * Game list with filter, screenshot preview, game information and the
  * console switches (saved per game). The information and screenshots are
  * scraped on the Amiga itself with curl from the libretro databases and
- * thumbnails and cached in PROGDIR:db and PROGDIR:snaps. "Spielen" runs
+ * thumbnails and cached in PROGDIR:db and PROGDIR:snaps. "Play" runs
  * PROGDIR:A26 with the game's switches and returns to the list.
  *
  * On an RTG Workbench the window opens there; on a native display the
@@ -635,7 +635,7 @@ static void fill_list(void)
         DoMethod(lst_games, MUIM_List_InsertSingle, games[i].name, MUIV_List_Insert_Bottom);
     }
     set(lst_games, MUIA_List_Quiet, FALSE);
-    sprintf(buf, "%d Spiele", nshown);
+    sprintf(buf, "%d games", nshown);
     set(txt_count, MUIA_Text_Contents, buf);
     set(lst_games, MUIA_List_Active, nshown ? 0 : MUIV_List_Active_Off);
     refresh_info();
@@ -660,11 +660,11 @@ static void snap_path(const Game *g, char *out, const char *ext)
 /* curl does the downloads (https); is it there? checked once */
 static int have_curl = -1;
 static const char no_curl_msg[] =
-    "\33bcurl fehlt\33n\n"
-    "Datenbank und Bilder werden mit curl geladen\n"
-    "(Aminet: curl, braucht AmiSSL).\n"
-    "Oder db/ und snaps/ von einem anderen\n"
-    "Rechner kopieren.";
+    "\33bcurl is missing\33n\n"
+    "The database and screenshots are downloaded\n"
+    "with curl (Aminet: curl, needs AmiSSL).\n"
+    "Or copy db/ and snaps/ from another\n"
+    "computer.";
 
 static int curl_ok(void)
 {
@@ -738,7 +738,7 @@ static void download_db(void)
     int i;
     if (!curl_ok()) { set_info(no_curl_msg); return; }
     make_dir(DB_DIR);
-    set_info("Lade Spieldatenbank (libretro) ...");
+    set_info("Downloading the game database (libretro) ...");
     set(app, MUIA_Application_Sleep, TRUE);
     for (i = 0; i < GAMEDB_FILES; i++) {
         sprintf(path, DB_DIR "/%s", gamedb_file[i]);
@@ -758,14 +758,14 @@ static void fetch_all_snaps(void)
     int i;
     if (!curl_ok()) { set_info(no_curl_msg); return; }
     for (i = 0; i < ngames; i++) {
-        sprintf(msg, "Lade Bilder: %d von %d\n%s", i + 1, ngames, games[i].name);
+        sprintf(msg, "Downloading screenshots: %d of %d\n%s", i + 1, ngames, games[i].name);
         set_info(msg);
         DoMethod(app, MUIM_Application_InputBuffered);
         fetch_snap(&games[i]);
         if (snap_fail == 2) {
-            set_info("\33bKeine Verbindung\33n\n"
-                     "Die Bilder konnten nicht geladen werden.\n"
-                     "Netzwerk pr\374fen und nochmal versuchen.");
+            set_info("\33bNo connection\33n\n"
+                     "The screenshots could not be downloaded.\n"
+                     "Check the network and try again.");
             return;
         }
     }
@@ -797,9 +797,9 @@ static void refresh_info(void)
         type = n ? cart_type_name(cart_detect(rom, (u32)n)) : "?";
     }
     sprintf(buf,
-            "\33bName:\33n %s\n\33bHersteller:\33n %s\n\33bEntwickler:\33n %s\n"
-            "\33bJahr:\33n %s   \33bGenre:\33n %s\n\33bRegion:\33n %s\n"
-            "\33bTyp:\33n %s (%ld KB)   \33bCRC:\33n %08lX",
+            "\33bName:\33n %s\n\33bPublisher:\33n %s\n\33bDeveloper:\33n %s\n"
+            "\33bYear:\33n %s   \33bGenre:\33n %s\n\33bRegion:\33n %s\n"
+            "\33bType:\33n %s (%ld KB)   \33bCRC:\33n %08lX",
             g->name,
             g->info && g->info->publisher ? g->info->publisher : "-",
             g->info && g->info->developer ? g->info->developer : "-",
@@ -868,7 +868,7 @@ static void choose_romdir(void)
 {
     struct FileRequester *req;
     struct TagItem t[5];
-    t[0].ti_Tag = ASLFR_TitleText;     t[0].ti_Data = (ULONG)"ROM-Ordner w\344hlen";
+    t[0].ti_Tag = ASLFR_TitleText;     t[0].ti_Data = (ULONG)"Choose the ROM drawer";
     t[1].ti_Tag = ASLFR_DrawersOnly;   t[1].ti_Data = TRUE;
     t[2].ti_Tag = ASLFR_InitialDrawer; t[2].ti_Data = (ULONG)romdir;
     t[3].ti_Tag = TAG_DONE;
@@ -995,10 +995,10 @@ static struct Screen *open_screen(void)
 }
 
 static const char *const cy_ab[] = { "B", "A", NULL };
-static const char *const cy_tvs[] = { "Farbe", "Schwarzwei\337", NULL };
-static const char *const cy_reg[] = { "Automatisch", "NTSC", "PAL", NULL };
-static const char *const cy_col[] = { "wie Region", "NTSC", "PAL", NULL };
-static const char *const cy_p1[] = { "aus", "Mausport-Joystick", NULL };
+static const char *const cy_tvs[] = { "Colour", "Black and white", NULL };
+static const char *const cy_reg[] = { "Automatic", "NTSC", "PAL", NULL };
+static const char *const cy_col[] = { "Like region", "NTSC", "PAL", NULL };
+static const char *const cy_p1[] = { "Off", "Mouse port joystick", NULL };
 
 static Object *label(const char *s)
 {
@@ -1010,14 +1010,14 @@ static Object *cycle(const char *const *entries)
     return MUI_NewObject(MUIC_Cycle, MUIA_Cycle_Entries, entries, TAG_DONE);
 }
 
-static const char *const reg_pages[] = { "Info", "Konsole", NULL };
+static const char *const reg_pages[] = { "Info", "Console", NULL };
 
 static int build_gui(void)
 {
     /* small own screen (PAL/NTSC hires, 200..256 lines): full-screen
      * backdrop window, information and switches on two pages */
     int small = own_screen && own_screen->Height < 400;
-    Object *konsole, *right;
+    Object *console, *right;
     img_class = MUI_CreateCustomClass(NULL, MUIC_Area, NULL, sizeof(struct ImgData), (APTR)img_dispatch);
     if (!img_class) return 0;
     img = NewObject(img_class->mcc_Class, NULL, MUIA_Frame, MUIV_Frame_Text,
@@ -1040,28 +1040,28 @@ static int build_gui(void)
     cy_region = cycle(cy_reg);
     cy_colors = cycle(cy_col);
     cy_port = cycle(cy_p1);
-    bt_start = MUI_MakeObject(MUIO_Button, "_Spielen");
-    bt_romdir = MUI_MakeObject(MUIO_Button, small ? "_ROMs ..." : "_ROM-Ordner ...");
-    bt_db = MUI_MakeObject(MUIO_Button, small ? "_Datenbank" : "_Datenbank laden");
-    bt_snaps = MUI_MakeObject(MUIO_Button, small ? "_Bilder" : "Alle _Bilder laden");
-    bt_quit = small ? MUI_MakeObject(MUIO_Button, "_Ende") : NULL;
+    bt_start = MUI_MakeObject(MUIO_Button, "_Play");
+    bt_romdir = MUI_MakeObject(MUIO_Button, small ? "_ROMs ..." : "_ROM drawer ...");
+    bt_db = MUI_MakeObject(MUIO_Button, small ? "_Database" : "Get _database");
+    bt_snaps = MUI_MakeObject(MUIO_Button, small ? "_Screenshots" : "Get all _screenshots");
+    bt_quit = small ? MUI_MakeObject(MUIO_Button, "_Quit") : NULL;
 
-    konsole = MUI_NewObject(MUIC_Group, MUIA_Group_Columns, 2,
+    console = MUI_NewObject(MUIC_Group, MUIA_Group_Columns, 2,
         small ? TAG_IGNORE : MUIA_Frame, MUIV_Frame_Group,
-        small ? TAG_IGNORE : MUIA_FrameTitle, "Konsole",
-        MUIA_Group_Child, label("Difficulty links"),  MUIA_Group_Child, cy_diff0,
-        MUIA_Group_Child, label("Difficulty rechts"), MUIA_Group_Child, cy_diff1,
+        small ? TAG_IGNORE : MUIA_FrameTitle, "Console",
+        MUIA_Group_Child, label("Left difficulty"),  MUIA_Group_Child, cy_diff0,
+        MUIA_Group_Child, label("Right difficulty"), MUIA_Group_Child, cy_diff1,
         MUIA_Group_Child, label("TV"),                MUIA_Group_Child, cy_tv,
         MUIA_Group_Child, label("Region"),            MUIA_Group_Child, cy_region,
-        MUIA_Group_Child, label("Farbpalette"),       MUIA_Group_Child, cy_colors,
-        MUIA_Group_Child, label("Spieler 2"),         MUIA_Group_Child, cy_port,
+        MUIA_Group_Child, label("Palette"),           MUIA_Group_Child, cy_colors,
+        MUIA_Group_Child, label("Player 2"),          MUIA_Group_Child, cy_port,
         TAG_DONE);
     if (small)
         right = MUI_NewObject(MUIC_Group, MUIA_HorizWeight, 100,
             MUIA_Group_Child, img,
             MUIA_Group_Child, MUI_NewObject(MUIC_Register, MUIA_Register_Titles, reg_pages,
                 MUIA_Group_Child, txt_info,
-                MUIA_Group_Child, konsole,
+                MUIA_Group_Child, console,
                 TAG_DONE),
             MUIA_Group_Child, MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE,
                 MUIA_Group_Child, bt_start,
@@ -1072,7 +1072,7 @@ static int build_gui(void)
         right = MUI_NewObject(MUIC_Group, MUIA_HorizWeight, 100,
             MUIA_Group_Child, img,
             MUIA_Group_Child, txt_info,
-            MUIA_Group_Child, konsole,
+            MUIA_Group_Child, console,
             MUIA_Group_Child, bt_start,
             TAG_DONE);
 
