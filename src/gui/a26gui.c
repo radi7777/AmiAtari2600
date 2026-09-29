@@ -1,7 +1,7 @@
 /*
- * a26gui.c - MUI launcher for the A26 emulator.
+ * a26gui.c - AmiAtari2600, the MUI launcher for the A26 emulator.
  *
- *   A26GUI [ROMDIR=<dir>]
+ *   AmiAtari2600 [ROMDIR=<dir>]
  *
  * Game list with filter, screenshot preview, game information and the
  * console switches (saved per game). The information and screenshots are
@@ -42,7 +42,7 @@
 #include "../core/unzip.h"
 
 #define VERSION "0.1"
-static const char vers[] = "$VER: A26GUI " VERSION " (" __DATE__ ")";
+static const char vers[] = "$VER: AmiAtari2600 " VERSION " (" __DATE__ ")";
 
 struct Library *MUIMasterBase;
 struct IntuitionBase *IntuitionBase;
@@ -50,7 +50,7 @@ struct GfxBase *GfxBase;
 struct Library *DataTypesBase;
 struct Library *UtilityBase;
 
-/* ---- trace log (PROGDIR:A26GUI.log), opened for every line so it can
+/* ---- trace log (PROGDIR:AmiAtari2600.log), opened for every line so it can
  * be read while the program runs and survives a crash; enabled with
  * DEBUG ---- */
 static int debug;
@@ -58,7 +58,7 @@ static void trace(const char *fmt, const char *arg)
 {
     FILE *f;
     if (!debug) return;
-    f = fopen("PROGDIR:A26GUI.log", "a");
+    f = fopen("PROGDIR:AmiAtari2600.log", "a");
     if (!f) return;
     fprintf(f, fmt, arg ? arg : "");
     fputc('\n', f);
@@ -97,7 +97,7 @@ static int  *shown;             /* list position -> game index */
 static int   nshown;
 static char  romdir[256] = "PROGDIR:roms";
 
-#define PREFS_FILE  "PROGDIR:A26GUI.prefs"
+#define PREFS_FILE  "PROGDIR:AmiAtari2600.prefs"
 #define GAMES_FILE  "PROGDIR:A26.games"
 #define DB_DIR      "PROGDIR:db"
 #define SNAP_DIR    "PROGDIR:snaps"
@@ -889,7 +889,7 @@ static void choose_romdir(void)
  * MUI 3.8 calls gadtools' GetVisualInfoA() with whatever happens to be in
  * a1 as tag list. OS 3.0/3.1 ignored the tags; the gadtools of OS 3.2
  * reads them (GTVI_...) and can run off through memory, which hung the
- * window opening now and then. While A26GUI runs, a small trampoline in
+ * window opening now and then. While the launcher runs, a small trampoline in
  * front of GetVisualInfoA passes NULL tags for calls from our own task;
  * other tasks go through unchanged.
  */
@@ -973,7 +973,7 @@ static struct Screen *open_screen(void)
             t[0].ti_Tag = force_native ? TAG_IGNORE : SA_LikeWorkbench; t[0].ti_Data = TRUE;
             t[1].ti_Tag = SA_DisplayID;     t[1].ti_Data = modeid;
             t[2].ti_Tag = SA_Depth;         t[2].ti_Data = depth;
-            t[3].ti_Tag = SA_Title;         t[3].ti_Data = (ULONG)"A26 - Atari 2600";
+            t[3].ti_Tag = SA_Title;         t[3].ti_Data = (ULONG)"AmiAtari2600";
             t[4].ti_Tag = TAG_IGNORE;
             t[5].ti_Tag = SA_SharePens;     t[5].ti_Data = TRUE;
             t[6].ti_Tag = SA_Pens;          t[6].ti_Data = (ULONG)pens;
@@ -1077,7 +1077,7 @@ static int build_gui(void)
             TAG_DONE);
 
     win = MUI_NewObject(MUIC_Window,
-        MUIA_Window_Title, small ? NULL : "A26 - Atari 2600 Emulator",
+        MUIA_Window_Title, small ? NULL : "AmiAtari2600 - Atari 2600 Emulator",
         /* the remembered size belongs to the Workbench window */
         own_screen ? TAG_IGNORE : MUIA_Window_ID, MAKE_ID('A','2','6','G'),
         own_screen ? MUIA_Window_Screen : TAG_IGNORE, own_screen,
@@ -1110,12 +1110,12 @@ static int build_gui(void)
         TAG_DONE);
 
     app = MUI_NewObject(MUIC_Application,
-        MUIA_Application_Title, "A26GUI",
+        MUIA_Application_Title, "AmiAtari2600",
         MUIA_Application_Version, vers,
-        MUIA_Application_Copyright, "AmiAtari2600",
-        MUIA_Application_Author, "AmiAtari2600",
+        MUIA_Application_Copyright, "\251 2026 radi777, MIT",
+        MUIA_Application_Author, "radi777",
         MUIA_Application_Description, "Atari 2600 Emulator",
-        MUIA_Application_Base, "A26GUI",
+        MUIA_Application_Base, "AMIATARI2600",
         MUIA_Application_Window, win,
         TAG_DONE);
     trace(app ? "application ok" : "application failed", NULL);
@@ -1163,7 +1163,7 @@ int main(int argc, char **argv)
     UtilityBase = OpenLibrary((CONST_STRPTR)"utility.library", 39);
     MUIMasterBase = OpenLibrary((CONST_STRPTR)MUIMASTER_NAME, 19);
     if (!IntuitionBase || !GfxBase || !DataTypesBase || !UtilityBase || !MUIMasterBase) {
-        printf("A26GUI needs OS 3.0+ and MUI 3.8+\n");
+        printf("AmiAtari2600 needs OS 3.0+ and MUI 3.8+\n");
         goto out;
     }
     for (i = 1; i < argc; i++) {
@@ -1171,7 +1171,7 @@ int main(int argc, char **argv)
             strncpy(romdir, argv[i] + 7, sizeof(romdir) - 1);
         else if (!strcmp(argv[i], "DEBUG") || !strcmp(argv[i], "debug"))
         {
-            FILE *f = fopen("PROGDIR:A26GUI.log", "w");
+            FILE *f = fopen("PROGDIR:AmiAtari2600.log", "w");
             if (f) fclose(f);
             debug = 1;
         }

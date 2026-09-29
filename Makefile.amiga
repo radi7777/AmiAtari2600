@@ -1,6 +1,6 @@
 # AmiAtari2600 - Amiga build with vbcc (cross from macOS/Linux or native).
 #
-#   make -f Makefile.amiga                 # -> build/amiga/A26
+#   make -f Makefile.amiga                 # -> build/amiga/A26 + AmiAtari2600
 #   make -f Makefile.amiga NDK_INC=/path/to/NDK3.2/Include_H
 #   make -f Makefile.amiga ASM_CPU=0       # C CPU core instead of 68k assembler
 #
@@ -45,7 +45,7 @@ endif
 
 .PHONY: all clean map
 
-all: $(OUT)/A26 $(OUT)/A26GUI
+all: $(OUT)/A26 $(OUT)/AmiAtari2600 $(OUT)/AmiAtari2600.info
 
 $(OUT)/A26: $(OBJ)
 	$(VC) $(CONFIG) $(CPU) -o $@ $(OBJ) -lamiga
@@ -146,12 +146,16 @@ MUI_SDK ?= $(abspath $(dir $(shell which $(VC)))../m68k-amigaos/include)
 GUI_SRC := src/gui/a26gui.c src/gui/gamedb.c src/gui/snapimg.c src/core/cart.c src/core/unzip.c
 
 .PHONY: gui
-gui: $(OUT)/A26GUI
+gui: $(OUT)/AmiAtari2600 $(OUT)/AmiAtari2600.info
 
 $(OUT)/muiinc/libraries/mui.h: $(MUI_SDK)/libraries/mui.h
 	@mkdir -p $(dir $@)
 	cp $(MUI_SDK)/libraries/mui.h $(dir $@)
 
-$(OUT)/A26GUI: $(GUI_SRC) src/gui/*.h src/core/cart.h $(OUT)/muiinc/libraries/mui.h
+$(OUT)/AmiAtari2600: $(GUI_SRC) src/gui/*.h src/core/cart.h $(OUT)/muiinc/libraries/mui.h
 	$(VC) $(CONFIG) -c99 $(CPU) $(OPT) -DA26_BIG_ENDIAN $(if $(NDK_INC),-I$(NDK_INC)) -I$(OUT)/muiinc \
 	  -o $@ $(GUI_SRC) -lamiga
+
+$(OUT)/AmiAtari2600.info: res/AmiAtari2600.png tools/mkicon.py
+	@mkdir -p $(OUT)
+	python3 tools/mkicon.py $< $@

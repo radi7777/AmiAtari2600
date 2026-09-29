@@ -74,7 +74,8 @@ Voraussetzungen: vbcc mit Target `m68k-amigaos` (`$VBCC` gesetzt, `vc` und
 
 ```sh
 make -f Makefile.amiga NDK_INC=/pfad/zu/NDK3.2/Include_H
-# -> build/amiga/A26 (mit Assembler-CPU; ASM_CPU=0 für die C-CPU)
+# -> build/amiga/A26 (Emulator, mit Assembler-CPU; ASM_CPU=0 für die C-CPU)
+#    build/amiga/AmiAtari2600 + AmiAtari2600.info (Oberfläche mit Icon)
 ```
 
 Bringt die vbcc-Installation keine passende Config mit (z. B. die aus der
@@ -85,6 +86,10 @@ In VS Code gibt es fertige Tasks (`Terminal > Run Task`): Host-Build, Tests und
 Amiga-Build. Für den Amiga-Build muss die Umgebungsvariable `NDK_INC` gesetzt sein.
 
 ## Benutzung auf dem Amiga
+
+`AmiAtari2600` ist die Oberfläche (Doppelklick auf das Icon). Sie startet für jedes Spiel
+den Emulator `A26`, der im selben Ordner liegen muss. `A26` lässt sich auch direkt aus der
+Shell aufrufen:
 
 ```
 A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [DELAY=n] [PORT1]
@@ -136,7 +141,7 @@ A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [DELAY=n] [PORT
 - Keine weiteren Bibliotheken oder Tools. ROMs können direkt aus `.zip`-Dateien geladen
   werden, ein externes unzip ist nicht nötig.
 
-**Oberfläche (`A26GUI`):**
+**Oberfläche (`AmiAtari2600`):**
 - **MUI 3.8+**, OS 3.x. Für Screenshots wird ein **picture.datatype V43** gebraucht
   (OS 3.2, 3.5/3.9) und ein **PNG-Datatype** (nicht bei jedem OS dabei, sonst Aminet).
 - Optional **curl** und **AmiSSL** (beides Aminet): Damit lädt die GUI die Spieledatenbank
@@ -159,3 +164,6 @@ beim Benutzer von libretro. ROMs werden nicht mitgeliefert.
 
 `tools/refdump` wird gegen gopher2600 (GPL) gebaut. Es ist nur ein Entwicklerwerkzeug,
 ein fertiges Binary davon wird nicht verteilt.
+
+Das Atari-Logo im Programm-Icon (`res/AmiAtari2600.png`) ist ein Markenzeichen von
+Atari und fällt nicht unter die MIT-Lizenz.

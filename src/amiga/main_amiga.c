@@ -184,7 +184,7 @@ static int parse_args(int argc, char **argv)
         else { printf("unknown option %s\n", a); return -1; }
     }
     if (!opt.rom) {
-        printf("A26 %s - Atari 2600 emulator for Amiga 68030/ECS\n"
+        printf("A26 %s - AmiAtari2600 emulator core (Atari 2600, Amiga ECS)\n"
                "usage: A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|F4|...]\n"
                "           [SKIP=n] [DELAY=n] [PORT1] [LEFT=A|B] [RIGHT=A|B] [BW] [NOSOUND] [KILLOS]\n"
                "           [PRI=n] [PROFILE] [BENCH=n] [FRAMES=n]\n", VERSION);
