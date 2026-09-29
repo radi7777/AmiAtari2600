@@ -23,8 +23,9 @@ Requirements
 Emulator (A26):
   - full speed needs at least a 68060 at 50 MHz (or e.g. PiStorm/Emu68);
     slower CPUs run with frameskip
-  - an ECS Agnus (8372A) to switch between PAL and NTSC while running; with an
-    OCS Agnus the emulator stays in the machine's own mode
+  - OCS, ECS or AGA. Switching between PAL and NTSC while running needs ECS
+    (8372A Agnus) or AGA; with OCS the emulator stays in the machine's own
+    mode. AGA is tested in Amiberry (A1200), not yet on a real AGA machine
   - nothing else
 
 Launcher (AmiAtari2600):

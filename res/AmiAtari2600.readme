@@ -23,6 +23,7 @@ FEATURES
   - bank switching: 2K, 4K, F8, F6, F4, the SC variants, FA, E0, E7,
     3F, FE, detected automatically
   - PAL and NTSC detected per game and switched while running on ECS
+    and AGA
   - low input latency: the joystick is read the moment the game asks
     for it, and each frame starts as late as possible
   - system friendly: network and timers keep running while you play
@@ -34,8 +35,8 @@ REQUIREMENTS
 
   a FAST Amiga: full speed needs a 68060 at 50 MHz or better (PiStorm,
     accelerator or emulator). A 68030 runs the games far too slowly.
-  ECS Agnus (8372A) to switch between PAL and NTSC; with OCS the
-    emulator stays in the machine's own mode
+  OCS, ECS or AGA chipset. PAL/NTSC switching needs ECS (8372A Agnus)
+    or AGA; with OCS the emulator stays in the machine's own mode
   MUI 3.8 or newer for the launcher
   picture.datatype V43 (OS 3.2, 3.5/3.9) and a PNG datatype for the
     screenshots
@@ -55,8 +56,9 @@ header mui.h is NOT included; get it from the MUI SDK. The Atari logo in
 the icon is a trademark of Atari and not covered by the licence.
 Source code also at https://github.com/radi7777/AmiAtari2600
 
-Tested on an A500 with PiStorm (AmigaOS 3.2.3), an A500 with a 68030
-and in Amiberry.
+Tested on an A500 with PiStorm (ECS, AmigaOS 3.2.3), an A500 with a
+68030 and in Amiberry as an A1200 (AGA). Not yet tested on a real AGA
+machine.
 
 This program is vibe coded. I described what it should do, an AI wrote
 the code, and I tested and decided what stayed in. The full source is
@@ -75,7 +77,8 @@ steuert die Custom-Chips direkt an; dazu gibt es eine MUI-Oberflaeche
 mit Spieleliste, Spielinfos und Screenshots.
 
 Voraussetzungen: ein SCHNELLER Amiga (68060/50 oder besser, PiStorm,
-Turbokarte oder Emulator), MUI 3.8, fuer Screenshots picture.datatype
+Turbokarte oder Emulator), OCS, ECS oder AGA (PAL/NTSC-Umschaltung nur
+mit ECS oder AGA), MUI 3.8, fuer Screenshots picture.datatype
 V43 und ein PNG-Datatype. Optional curl und AmiSSL, um Datenbank und
 Screenshots zu laden; sonst kann man sie von Hand kopieren (siehe
 ReadMe).
@@ -87,8 +90,9 @@ bei.
 Der Quelltext liegt vollstaendig bei, MIT-Lizenz. Das Atari-Logo im
 Icon ist eine Marke von Atari und faellt nicht unter die Lizenz.
 
-Getestet auf A500 mit PiStorm (AmigaOS 3.2.3), A500 mit 68030 und in
-Amiberry.
+Getestet auf A500 mit PiStorm (ECS, AmigaOS 3.2.3), A500 mit 68030
+und in Amiberry als A1200 (AGA). Auf echter AGA-Hardware noch nicht
+getestet.
 
 Dieses Programm ist vibe-coded. Ich habe beschrieben, was es koennen
 soll, geschrieben hat den Code eine KI, und getestet und entschieden

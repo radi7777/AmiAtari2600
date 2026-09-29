@@ -1,6 +1,6 @@
 # AmiAtari2600
 
-Atari 2600 emulator for classic Amigas (ECS chipset). It runs without SDL and without OS
+Atari 2600 emulator for classic Amigas (OCS, ECS and AGA). It runs without SDL and without OS
 graphics and drives the Copper, bitplanes, Paula and BEAMCON0 directly. A MUI launcher
 with a game list, game information and screenshots comes with it.
 Background and the original goals are in [docs/PROJECT.md](docs/PROJECT.md), the design
@@ -141,8 +141,9 @@ A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [DELAY=n] [PORT
 **Emulator (`A26`):**
 - For full speed at least a **68060 at 50 MHz** (or comparable, e.g. Emu68/PiStorm).
   Slower CPUs run with frameskip.
-- For switching PAL/NTSC at run time an **8372A Fat Agnus (ECS)**. With an OCS Agnus the
-  emulator runs in the machine's native mode, without switching.
+- OCS, ECS or AGA. Switching PAL/NTSC at run time needs an **8372A Fat Agnus (ECS)** or
+  **AGA**. With an OCS Agnus the emulator runs in the machine's native mode, without
+  switching. AGA is tested in Amiberry (A1200), not yet on a real AGA machine.
 - No other libraries or tools. ROMs can be loaded straight from `.zip` files; no external
   unzip is needed.
 
