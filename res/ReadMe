@@ -1,0 +1,66 @@
+AmiAtari2600 - Atari 2600 emulator for classic Amigas
+======================================================
+
+AmiAtari2600 emulates the Atari 2600 (VCS) on AmigaOS 3.x. The emulator drives
+the Amiga's custom chips directly (Copper, bitplanes, Paula, BEAMCON0) and
+comes with a MUI launcher: game list with filter, game information, screenshots
+and the console switches, saved per game.
+
+Contents
+--------
+  AmiAtari2600       the launcher (MUI) - double-click its icon
+  A26                the emulator, started by the launcher; also usable from
+                     the Shell
+  roms/              put your ROMs here (.bin, .a26, .rom or .zip)
+  ReadMe, LICENSE    this file and the licence
+
+The launcher creates db/ (game database) and snaps/ (screenshots) next to
+itself. No ROMs are included.
+
+Requirements
+------------
+Emulator (A26):
+  - full speed needs at least a 68060 at 50 MHz (or e.g. PiStorm/Emu68);
+    slower CPUs run with frameskip
+  - an ECS Agnus (8372A) to switch between PAL and NTSC while running; with an
+    OCS Agnus the emulator stays in the machine's own mode
+  - nothing else
+
+Launcher (AmiAtari2600):
+  - MUI 3.8 or newer, OS 3.x
+  - screenshots need picture.datatype V43 (OS 3.2, 3.5/3.9) and a PNG datatype
+  - optional: curl and AmiSSL (both on Aminet). With them "Get database" and
+    "Get all screenshots" download the libretro game database and screenshots.
+    Without them copy the files yourself: the .dat files of libretro-database
+    (metadat/no-intro, publisher, developer, releaseyear, genre for
+    "Atari - 2600") into db/ as nointro.dat, publisher.dat, developer.dat,
+    releaseyear.dat and genre.dat, and screenshots as snaps/<CRC32>.png
+    (8 upper-case hex digits, e.g. snaps/1E86DE5A.png)
+
+Starting A26 from the Shell
+---------------------------
+  A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [DELAY=n]
+      [PORT1] [PRI=n] [NOSOUND] [KILLOS] [PROFILE] [BENCH=n] [FRAMES=n]
+
+  Region and bank switching are detected automatically. PORT1: the joystick in
+  the mouse port controls player 2. KILLOS switches the OS off while playing
+  (a little faster; network and timers stop).
+
+Keys
+----
+  Joystick port 2 / cursor keys + Space/Alt   player 1
+  F1 / F2     Game Reset / Game Select (hold)
+  F3          colour / black and white
+  F4 / F5     left / right difficulty
+  F6          region: Auto -> NTSC -> PAL -> Auto
+  P           pause
+  HELP        hard reset
+  ESC         quit
+
+Licence
+-------
+MIT, see LICENSE. Written from scratch, no Stella code. The Atari logo in the
+program icon is a trademark of Atari and is not covered by the MIT licence.
+
+Source code: https://github.com/radi7777/AmiAtari2600
+Author: radi777

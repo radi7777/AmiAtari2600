@@ -84,6 +84,9 @@ If the vbcc installation has no suitable config (e.g. the one from the m68k-amig
 toolchain, whose `aos68k` points to other paths), pass an adjusted copy with
 `CONFIG=+/path/to/aos68k`.
 
+`make -f Makefile.amiga dist` builds the release archive `build/AmiAtari2600-<version>.lha`
+(one drawer with both programs, the icon, `res/ReadMe` and the licence; needs `lha`).
+
 VS Code has ready-made tasks (`Terminal > Run Task`): host build, tests and Amiga build.
 The Amiga build needs the environment variable `NDK_INC`.
 
