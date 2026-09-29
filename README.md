@@ -126,13 +126,36 @@ A26 <rom> [PAL|NTSC] [COLORS=PAL|NTSC] [TYPE=F8|F6|...] [SKIP=n] [DELAY=n] [PORT
 | HELP | Hard-Reset |
 | ESC | Beenden |
 
-Zielhardware: 68030 mit 25–50 MHz und **8372A Fat Agnus (ECS)** für die
-PAL/NTSC-Umschaltung zur Laufzeit. Mit OCS-Agnus läuft der Emulator im nativen Modus
-des Rechners, ohne Umschaltung.
+## Voraussetzungen
+
+**Emulator (`A26`):**
+- Für volle Geschwindigkeit mindestens **68060 mit 50 MHz** (oder vergleichbar, z. B.
+  Emu68/PiStorm). Langsamere CPUs laufen mit Frameskip.
+- Für die PAL/NTSC-Umschaltung zur Laufzeit **8372A Fat Agnus (ECS)**. Mit OCS-Agnus
+  läuft der Emulator im nativen Modus des Rechners, ohne Umschaltung.
+- Keine weiteren Bibliotheken oder Tools. ROMs können direkt aus `.zip`-Dateien geladen
+  werden, ein externes unzip ist nicht nötig.
+
+**Oberfläche (`A26GUI`):**
+- **MUI 3.8+**, OS 3.x. Für Screenshots wird ein **picture.datatype V43** gebraucht
+  (OS 3.2, 3.5/3.9) und ein **PNG-Datatype** (nicht bei jedem OS dabei, sonst Aminet).
+- Optional **curl** und **AmiSSL** (beides Aminet): Damit lädt die GUI die Spieledatenbank
+  (libretro-database) und die Screenshots (libretro-thumbnails) selbst über https.
+  Ohne curl/AmiSSL geht alles andere auch. Datenbank und Bilder kann man dann selbst
+  kopieren: die `.dat`-Dateien nach `db/` (`nointro.dat`, `publisher.dat`,
+  `developer.dat`, `releaseyear.dat`, `genre.dat`), die Bilder als `snaps/<CRC32>.png`
+  (8 Hex-Ziffern in Großbuchstaben, z. B. `snaps/1E86DE5A.png`), beides im Programmordner.
+- cybergraphics.library wird benutzt, wenn vorhanden (RTG-Bildschirm), ist aber nicht
+  nötig.
 
 ## Lizenz
 
-Noch nicht festgelegt. Der Code ist eigenständig geschrieben und enthält keinen
+MIT, siehe [LICENSE](LICENSE). Der Code ist eigenständig geschrieben und enthält keinen
 Stella-Code. Das TIA-Audio-Modell bildet dieselbe Hardware-Logik nach, die auch Stella
-verwendet. Falls später Stella-Code übernommen wird, muss das Projekt GPL-2.0-kompatibel
-lizenziert werden.
+verwendet.
+
+Die Spieledatenbank und die Screenshots gehören nicht zum Projekt. Die GUI lädt sie erst
+beim Benutzer von libretro. ROMs werden nicht mitgeliefert.
+
+`tools/refdump` wird gegen gopher2600 (GPL) gebaut. Es ist nur ein Entwicklerwerkzeug,
+ein fertiges Binary davon wird nicht verteilt.
