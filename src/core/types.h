@@ -26,7 +26,7 @@ typedef uint32_t u32;
 typedef int32_t  s32;
 #endif
 
-/* Register-parameter hints for vbcc (see docs/PROJEKT.md, "__reg()").
+/* Register-parameter hints for vbcc (see docs/PROJECT.md, "__reg()").
  * On other compilers they expand to nothing. */
 #ifdef __VBCC__
 #define REG(r) __reg(r)
