@@ -13,6 +13,7 @@ Contents
                      the Shell
   roms/              put your ROMs here (.bin, .a26, .rom or .zip)
   ReadMe, LICENSE    this file and the licence
+  Source/            the full source code (also on GitHub, see below)
 
 The launcher creates db/ (game database) and snaps/ (screenshots) next to
 itself. No ROMs are included.

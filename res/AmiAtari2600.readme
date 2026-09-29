@@ -1,0 +1,99 @@
+Short:        Atari 2600 emulator with MUI launcher
+Kurz:         Atari-2600-Emulator mit MUI-Oberflaeche
+Author:       radi777
+Uploader:     thomas.radeck gmail com (radi777, see note below)
+Type:         misc/emu
+Version:      @VERSION@
+Architecture: m68k-amigaos >= 3.0
+Requires:     MUI 3.8; optional: curl, AmiSSL, PNG datatype
+Distribution: Aminet
+
+
+AmiAtari2600 - an Atari 2600 emulator for classic Amigas
+========================================================
+
+Plays Atari 2600 (VCS) games on AmigaOS 3.x. The emulator drives the
+Amiga's custom chips directly - Copper, bitplanes, Paula, BEAMCON0 - and
+comes with a MUI launcher that shows your games with information and
+screenshots.
+
+FEATURES
+
+  - 6507 CPU in 68k assembler, cycle-exact TIA video and sound, RIOT
+  - bank switching: 2K, 4K, F8, F6, F4, the SC variants, FA, E0, E7,
+    3F, FE, detected automatically
+  - PAL and NTSC detected per game and switched while running on ECS
+  - low input latency: the joystick is read the moment the game asks
+    for it, and each frame starts as late as possible
+  - system friendly: network and timers keep running while you play
+  - launcher: game list with filter, publisher, developer, year and
+    genre from the libretro database, screenshots, console switches
+    saved per game, ROMs straight from .zip files
+
+REQUIREMENTS
+
+  a FAST Amiga: full speed needs a 68060 at 50 MHz or better (PiStorm,
+    accelerator or emulator). A 68030 runs the games far too slowly.
+  ECS Agnus (8372A) to switch between PAL and NTSC; with OCS the
+    emulator stays in the machine's own mode
+  MUI 3.8 or newer for the launcher
+  picture.datatype V43 (OS 3.2, 3.5/3.9) and a PNG datatype for the
+    screenshots
+  optional: curl and AmiSSL to download the game database and the
+    screenshots. Without them, copy them by hand - see ReadMe.
+
+INSTALLATION
+
+Copy the AmiAtari2600 drawer to your hard disk - the game database and
+the screenshots are stored next to the program. Put your ROMs (.bin,
+.a26, .rom or .zip) into the roms drawer and start AmiAtari2600. No ROMs
+are included. The emulator A26 can also be used from the Shell; see
+ReadMe in the drawer.
+
+Full source is included (Source drawer), MIT licence. MUI's developer
+header mui.h is NOT included; get it from the MUI SDK. The Atari logo in
+the icon is a trademark of Atari and not covered by the licence.
+Source code also at https://github.com/radi7777/AmiAtari2600
+
+Tested on an A500 with PiStorm (AmigaOS 3.2.3), an A500 with a 68030
+and in Amiberry.
+
+This program is vibe coded. I described what it should do, an AI wrote
+the code, and I tested and decided what stayed in. The full source is
+in the archive, so you can judge for yourself.
+
+Note on the uploader address: it is written without the @ and the dot
+to keep address harvesters out. Put an @ before "gmail" and a dot in
+front of "com" and you have it.
+
+
+DEUTSCH
+=======
+
+AmiAtari2600 spielt Atari-2600-Spiele auf AmigaOS 3.x. Der Emulator
+steuert die Custom-Chips direkt an; dazu gibt es eine MUI-Oberflaeche
+mit Spieleliste, Spielinfos und Screenshots.
+
+Voraussetzungen: ein SCHNELLER Amiga (68060/50 oder besser, PiStorm,
+Turbokarte oder Emulator), MUI 3.8, fuer Screenshots picture.datatype
+V43 und ein PNG-Datatype. Optional curl und AmiSSL, um Datenbank und
+Screenshots zu laden; sonst kann man sie von Hand kopieren (siehe
+ReadMe).
+
+Die Schublade AmiAtari2600 auf die Festplatte kopieren, die ROMs in
+die Schublade roms legen und AmiAtari2600 starten. ROMs liegen nicht
+bei.
+
+Der Quelltext liegt vollstaendig bei, MIT-Lizenz. Das Atari-Logo im
+Icon ist eine Marke von Atari und faellt nicht unter die Lizenz.
+
+Getestet auf A500 mit PiStorm (AmigaOS 3.2.3), A500 mit 68030 und in
+Amiberry.
+
+Dieses Programm ist vibe-coded. Ich habe beschrieben, was es koennen
+soll, geschrieben hat den Code eine KI, und getestet und entschieden
+habe ich. Der Quelltext liegt vollstaendig bei - schau selbst hinein.
+
+Hinweis zur Uploader-Adresse: sie steht ohne @ und ohne Punkt da, damit
+Adresssammler nichts davon haben. Ein @ vor "gmail", ein Punkt vor
+"com", fertig.

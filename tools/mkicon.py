@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mkicon.py - PNG -> Amiga tool icon (.info), standard library only.
+mkicon.py - PNG -> Amiga tool or drawer icon (.info), standard library only.
 
 The icon carries two images:
   - the classic planar image (2 planes, Workbench colours 0 = background,
@@ -9,6 +9,7 @@ The icon carries two images:
     icon.library 44+ (OS 3.5, 3.9, 3.2) shows instead.
 
     python3 tools/mkicon.py res/AmiAtari2600.png build/amiga/AmiAtari2600.info
+    python3 tools/mkicon.py --drawer res/AmiAtari2600.png build/dist/AmiAtari2600.info
 """
 import struct
 import sys
@@ -189,12 +190,23 @@ def planar(w, h, idx, pal):
     return image + bytes(planes[0]) + bytes(planes[1])
 
 
-def diskobject(w, h, tooltypes):
+WBDRAWER, WBTOOL = 2, 3
+
+
+def diskobject(w, h, tooltypes, typ):
     gadget = struct.pack('>IhhhhHHHIIIIIHI', 0, 0, 0, w, h + 1, 4, 3, 1,
                          1, 0, 0, 0, 0, 0, 1)
     return struct.pack('>HH', 0xE310, 1) + gadget + struct.pack(
-        '>BBIIiiIII', 3, 0, 0, 1 if tooltypes else 0,
-        -0x80000000, -0x80000000, 0, 0, STACK)
+        '>BBIIiiIII', typ, 0, 0, 1 if tooltypes else 0,
+        -0x80000000, -0x80000000, 1 if typ == WBDRAWER else 0, 0,
+        STACK if typ == WBTOOL else 0)
+
+
+def drawerdata():
+    """NewWindow for the drawer window + CurrentX/Y (the OS 2+ part,
+    flags and view modes, follows the images)"""
+    return struct.pack('>hhhhBBIIIIIIIhhHHH', 60, 40, 360, 160, 255, 255, 0, 0,
+                       0, 0, 0, 0, 0, 90, 40, 0xFFFF, 0xFFFF, 1) + struct.pack('>ii', 0, 0)
 
 
 def strings(lst):
@@ -206,19 +218,28 @@ def strings(lst):
 
 
 def main():
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    drawer = '--drawer' in args
+    if drawer:
+        args.remove('--drawer')
+    if len(args) != 2:
         raise SystemExit(__doc__)
-    w, h, px = read_png(sys.argv[1])
+    w, h, px = read_png(args[0])
     if w > 256 or h > 256:
         raise SystemExit('icon too big')
     pal, idx = quantize(px, 32)
     tooltypes = []
-    data = diskobject(w, h, tooltypes) + planar(w, h, idx, pal)
+    data = diskobject(w, h, tooltypes, WBDRAWER if drawer else WBTOOL)
+    if drawer:
+        data += drawerdata()
+    data += planar(w, h, idx, pal)
     if tooltypes:
         data += strings(tooltypes)
+    if drawer:
+        data += struct.pack('>IH', 0, 0)    # dd_Flags, dd_ViewModes: defaults
     data += glow(w, h, pal, idx)
-    open(sys.argv[2], 'wb').write(data)
-    print('%s: %dx%d, %d colours, %d bytes' % (sys.argv[2], w, h, len(pal) - 1, len(data)))
+    open(args[1], 'wb').write(data)
+    print('%s: %dx%d, %d colours, %d bytes' % (args[1], w, h, len(pal) - 1, len(data)))
 
 
 if __name__ == '__main__':
